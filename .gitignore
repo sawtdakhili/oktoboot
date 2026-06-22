@@ -14,6 +14,9 @@ data/fonts/
 data/*.txt
 !data/.gitkeep
 
+# Icon intermediates — regenerable from data/icon.svg
+data/icon.iconset/
+
 # macOS
 .DS_Store
 **/.DS_Store

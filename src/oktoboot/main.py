@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QKeySequence, QAction
+from PySide6.QtGui import QFont, QFontDatabase, QIcon, QKeySequence, QAction
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QMainWindow, QMessageBox, QWidget,
 )
@@ -357,6 +357,10 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("oktoboot")
     app.setStyleSheet(STYLE)
+
+    icon_path = DATA_DIR / "icon.icns"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()
