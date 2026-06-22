@@ -8,4 +8,6 @@ Offline Arabic Arabizi/Franco-Arab text editor. See memory for full context.
 
 **Rebuild data:** `python3 scripts/build_frequencies.py && python3 scripts/build_doda.py`
 
+**Rebuild icon:** `rsvg-convert` to generate the `.iconset` PNGs from `data/icon.svg`, then `iconutil -c icns data/icon.iconset -o data/icon.icns`
+
 Run tests before touching engine.py or editor.py — 107 tests must pass.
