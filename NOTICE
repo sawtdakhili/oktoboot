@@ -1,0 +1,35 @@
+oktoboot — Third-Party Notices
+================================
+
+This software bundles the following third-party works. Each is
+distributed under its own license as noted below.
+
+-------------------------------------------------------------------------------
+1. Darija Open Dataset (DODa)
+   Source:  https://github.com/darija-open-dataset/dataset
+   License: Creative Commons Attribution-NonCommercial 4.0 International
+            (CC BY-NC 4.0) — https://creativecommons.org/licenses/by-nc/4.0/
+   Authors: Aissam Outchakoucht, Hamza Es-Samaali, and contributors
+
+   This dataset (bundled as data/doda.db) enables native Moroccan Darija
+   transliteration. Non-commercial use only per CC BY-NC 4.0.
+
+-------------------------------------------------------------------------------
+2. Arabic Frequency Word List (OpenSubtitles 2018)
+   Source:  https://github.com/hermitdave/FrequencyWords
+            https://opus.nlpl.eu/OpenSubtitles2018.php
+   License: Creative Commons Attribution-ShareAlike 3.0 Unported
+            (CC BY-SA 3.0) — https://creativecommons.org/licenses/by-sa/3.0/
+   Authors: Hermit Dave; OpenSubtitles.org contributors
+
+   Bundled as data/frequencies.db. Word frequency list derived from
+   OpenSubtitles 2018 Arabic subtitle corpus.
+
+-------------------------------------------------------------------------------
+3. Amiri Font
+   Source:  https://github.com/aliftype/amiri
+   License: SIL Open Font License, Version 1.1 (OFL-1.1)
+            https://openfontlicense.org/
+   Authors: Khaled Hosny and contributors
+
+   Bundled as data/fonts/Amiri-Regular.ttf (and variants).
