@@ -161,6 +161,36 @@ def test_single_s():
     assert "س" in results or any("س" in r for r in results[:3])
 
 
+def test_bug_regressions():
+    """Regressions for bugs found by comparing against Yamli."""
+    # Bad DODa entry: bgha→با was ranked above بغا
+    assert_first("bgha", "بغا")
+    # Egyptian word لسه was frequency-promoted above Moroccan لاش
+    assert_first("lach", "لاش")
+    # Vowel absorption: "ra"→ر and "na"→ن swallowed both alifs in رانا
+    assert_first("rana", "رانا")
+    # Expansion absorbed final 'a': "ta"→ت gave حت instead of حتى
+    assert_first("7ta", "حتى")
+    # DODa had hna→حنا (we) but users almost always mean هنا (here)
+    assert_first("hna", "هنا")
+    # Frequency corpus promoted ماء over ما
+    assert_first("ma", "ما")
+    # DODa returned علا before على
+    assert_first("3la", "على")
+    # Expansion absorbed 'a' before 'n': شكرن instead of شكران
+    assert_first("chokran", "شكران")
+    # Expansion absorbed final 'a': عليه instead of عليها
+    assert_first("3liha", "عليها")
+    # Generative produced space-separated "و لكن"; fixed to ولكن
+    assert_first("walakin", "ولكن")
+    # Bad DODa entry: fi→ف (letter) ranked above في (preposition)
+    assert_first("fi", "في")
+    # Moroccan function words that must beat corpus noise
+    assert_first("fach", "فاش")
+    assert_first("bach", "باش")
+    assert_first("3lach", "علاش")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = failed = 0

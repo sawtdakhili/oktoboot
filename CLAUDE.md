@@ -10,7 +10,7 @@ Offline Arabic Arabizi/Franco-Arab text editor. See memory for full context.
 
 **Rebuild icon:** `rsvg-convert` to generate the `.iconset` PNGs from `data/icon.svg`, then `iconutil -c icns data/icon.iconset -o data/icon.icns`
 
-Run tests before touching engine.py or editor.py — 107 tests must pass.
+Run tests before touching engine.py or editor.py — engine/comprehensive/extended suites must all pass (143+ tests; editor suite is slightly timing-dependent on Qt, expect 29–30/30).
 
 **Next up:**
 1. Status bar — save state + Arabizi mode indicator (`#42c6ff` cyan / `#ff2afc` pink dot)

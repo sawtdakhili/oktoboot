@@ -175,11 +175,12 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "labaas":   ["لاباس"],
     "labes":    ["لاباس"],
     "wach":     ["واش"],
-    "wach":     ["واش"],
     "nta":      ["نتا"],
     "nti":      ["نتي"],
-    "hna":      ["حنا"],
+    "hna":      ["هنا", "حنا"],   # "here" is far more common than "we"
     "ntoma":    ["نتوما"],
+    "ntuma":    ["نتوما"],
+    "ntouma":   ["نتوما"],
     "homa":     ["هوما"],
     "daba":     ["دابا"],
     "gadi":     ["غادي"],
@@ -188,6 +189,7 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "makainch": ["ماكاينش"],
     "bghit":    ["بغيت"],
     "bghiit":   ["بغيت"],
+    "bgha":     ["بغا"],          # DODa has bad entry "با" at rowid 1
     "khoya":    ["خويا"],
     "lalla":    ["لالة"],
     "safi":     ["صافي"],
@@ -210,6 +212,20 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "sir":      ["سير"],
     "dkhel":    ["دخل"],
     "khrej":    ["خرج"],
+    # Function words: corpus or bad DODa entries promote wrong forms
+    "fi":       ["في"],
+    "ma":       ["ما"],
+    "3la":      ["على"],
+    "lach":     ["لاش"],
+    "fach":     ["فاش"],
+    "3lach":    ["علاش"],
+    "bach":     ["باش"],
+    "7ta":      ["حتى"],
+    "walakin":  ["ولكن"],
+    "walkin":   ["ولكن"],
+    "chokran":  ["شكران"],
+    "3liha":    ["عليها"],
+    "rana":     ["رانا", "رنا"],  # Moroccan progressive "rah-na"; also name رنا
 }
 
 
@@ -293,9 +309,25 @@ def _generative_lookup(token: str) -> list[str]:
         candidates += ["ال" + c for c in stem_candidates]
 
     scored = [(c, _freq_score(c)) for c in candidates]
-    # Partition: known words sorted by freq descending, then unknowns
-    known = sorted([(c, f) for c, f in scored if f > 0], key=lambda x: x[1], reverse=True)
-    unknown = [(c, 0) for c, f in scored if f == 0]
+    # When input ends with a vowel, consonant-absorbing expansions can silently drop
+    # output letters (e.g. "rana"→رن instead of رانا because "ra"→ر, "na"→ن).
+    # Candidates shorter than (input_len - 1) are likely truncated: demote them to
+    # the unknown tier regardless of corpus frequency.
+    vowel_final = token[-1].lower() in "aeiou" if token else False
+    min_expected = len(token) - 1 if vowel_final else 0
+
+    def _is_short(c: str) -> bool:
+        return vowel_final and len(c) < min_expected
+
+    # Partition: known words sorted by freq desc then len desc; demote short forms
+    known = sorted(
+        [(c, f) for c, f in scored if f > 0 and not _is_short(c)],
+        key=lambda x: (x[1], len(x[0])), reverse=True,
+    )
+    unknown = sorted(
+        [(c, 0) for c, f in scored if f == 0 or _is_short(c)],
+        key=lambda x: -len(x[0]),
+    )
 
     # Deduplicate while preserving order
     seen: set[str] = set()
