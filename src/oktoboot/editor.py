@@ -260,6 +260,10 @@ class ArabicEditor(QTextEdit):
         self.cursorPositionChanged.connect(self._on_cursor_moved)
         QApplication.instance().applicationStateChanged.connect(self._on_app_state_changed)
 
+        # Hide Qt's native (white) caret so only our pink one shows; otherwise
+        # the two blink on separate timers and the cursor flickers white+pink.
+        self.setCursorWidth(0)
+
         # Blink timer for custom cursor
         self._cursor_visible = True
         self._cursor_timer = QTimer(self)
@@ -288,7 +292,7 @@ class ArabicEditor(QTextEdit):
         super().paintEvent(event)
         if not self.hasFocus() or not self._cursor_visible:
             return
-        # Draw our custom cursor on top of Qt's default (which is hard to see)
+        # Draw our pink cursor (Qt's native caret is hidden via setCursorWidth(0))
         painter = QPainter(self.viewport())
         r = self.cursorRect()
         # Keep cursor inside viewport bounds
