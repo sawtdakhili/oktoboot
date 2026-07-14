@@ -5,8 +5,9 @@ Transliteration engine — three tiers:
   Tier 2: Generative + frequency filter  → MSA and novel words
   Tier 3: Learned preferences  → user's own persistent choices
 
-Result: list of (arabic, score) sorted best-first.
-Item 0 of the suggestion list is always the raw Latin input (handled by caller).
+Result: ranked list of candidates, best-first. The raw Latin token itself is
+one of the candidates (folded into the same ranking, not a fixed slot) —
+see suggest()'s docstring.
 """
 
 from __future__ import annotations
@@ -126,6 +127,16 @@ for _key in ("ch", "sh", "gh", "kh", "dh", "dj", "th"):
 
 # Pre-sort: longest keys first so we match greedily
 _SORTED_KEYS = sorted(_EXPANDED.keys(), key=len, reverse=True)
+
+# Word-final long ā is very often written as alef maqsura (ى) or ta marbuta
+# (ة): "watawala"→وتولى, "moustafa"→مصطفى, "zwina"→زوينة, "3la"→على. Neither
+# letter can appear mid-word, so they're offered only when the matched key
+# consumes the end of the token (see _generate_candidates). CV keys like
+# "la" don't need entries: the ل+ى path is reachable via "l" then final "a".
+_FINAL_EXTRA: dict[str, list[str]] = {
+    "a":  ["ى", "ة"],
+    "aa": ["ى"],
+}
 
 # ---------------------------------------------------------------------------
 # URL / number pattern — words matching these bypass transliteration
@@ -277,7 +288,10 @@ def _generate_candidates(token: str) -> list[str]:
         for key in _SORTED_KEYS:
             if token_lower[pos:pos + len(key)] == key:
                 matched = True
-                for ar_letter in _EXPANDED[key]:
+                letters = _EXPANDED[key]
+                if pos + len(key) == len(token_lower) and key in _FINAL_EXTRA:
+                    letters = letters + _FINAL_EXTRA[key]
+                for ar_letter in letters:
                     if len(results) >= MAX_CANDIDATES:
                         return
                     recurse(pos + len(key), current + ar_letter)
@@ -296,6 +310,28 @@ def _freq_score(word: str) -> int:
     return row["frequency"] if row else 0
 
 
+def _min_expected_len(token: str) -> int:
+    """
+    Lower bound on how many Arabic letters a faithful transliteration of a
+    vowel-final token should have: one per consonant unit, plus one for the
+    final long vowel (word-final ā/ī/ū is always written — as ا/ى/ي/و —
+    unlike interior short vowels, which usually aren't).
+
+    Deliberately NOT len(token)-1: that assumed every Latin letter becomes
+    an Arabic letter, which is false for any multi-syllable word — it buried
+    the correct وتولى (5 letters) under letter-by-letter 8-glyph junk for
+    "watawala".
+    """
+    t = token.lower()
+    t = re.sub(r"ch|sh|gh|kh|dh|dj|th", "x", t)   # digraph = one Arabic letter
+    t = re.sub(r"(.)\1+", r"\1", t)               # doubles = shadda / one long vowel
+    # A trailing glide+vowel ("hya"→هي, "howa"→هو) writes the glide AS the
+    # final vowel letter; don't also count it as a required consonant.
+    t = re.sub(r"[wy][aeiou]$", "", t)
+    consonants = len(re.sub(r"[aeiou']", "", t))
+    return consonants + 1
+
+
 def _generative_lookup(token: str) -> list[str]:
     """
     Generate all candidate Arabic strings and rank: known words (by freq) first,
@@ -311,10 +347,11 @@ def _generative_lookup(token: str) -> list[str]:
     scored = [(c, _freq_score(c)) for c in candidates]
     # When input ends with a vowel, consonant-absorbing expansions can silently drop
     # output letters (e.g. "rana"→رن instead of رانا because "ra"→ر, "na"→ن).
-    # Candidates shorter than (input_len - 1) are likely truncated: demote them to
-    # the unknown tier regardless of corpus frequency.
+    # Candidates below the consonant-count floor are likely truncated: demote them
+    # to the unknown tier regardless of corpus frequency. Tokens shorter than 3
+    # chars are exempt ("wa"→و is legitimately one letter).
     vowel_final = token[-1].lower() in "aeiou" if token else False
-    min_expected = len(token) - 1 if vowel_final else 0
+    min_expected = _min_expected_len(token) if (vowel_final and len(token) >= 3) else 0
 
     def _is_short(c: str) -> bool:
         return vowel_final and len(c) < min_expected
@@ -377,13 +414,18 @@ def suggest(
     max_results: int = 10,
 ) -> list[str]:
     """
-    Return a ranked list of Arabic suggestions for `token`.
+    Return a ranked list of suggestions for `token`, best-first — the item
+    at index 0 is always the intended default/highlighted choice.
 
-    The caller prepends the raw Latin token as item 0 (the "keep as Latin"
-    option). This function returns only Arabic candidates.
+    The raw Latin token itself is one of the candidates, not a separate
+    fixed slot: it's folded into the same three-tier ranking as everything
+    else. If the user has previously chosen (via Shift+Space) to keep this
+    exact token in Latin, that's a learned choice like any other and ranks
+    accordingly (usually first). Otherwise it's appended as a low-priority
+    fallback so it's always reachable without crowding out real candidates.
 
     Special cases:
-    - Pure number → [Arabic-Indic numeral]  (no Arabic letter)
+    - Pure number → [Arabic-Indic numeral, digit fallback]
     - URL / empty → []
     """
     if not token:
@@ -391,9 +433,10 @@ def suggest(
 
     token = token.strip()
 
-    # Pure number (standalone)
+    # Pure number (standalone) — Arabic-Indic numeral ranks first, the
+    # plain digit is always reachable as a fallback.
     if re.match(r"^\d+$", token):
-        return [token.translate(_ARABIC_INDIC)]
+        return [token.translate(_ARABIC_INDIC), token]
 
     # URL or other bypass
     if _BYPASS_RE.match(token):
@@ -424,23 +467,13 @@ def suggest(
     for ar in generative:
         add(ar)
 
-    return merged[:max_results]
+    if token in seen:
+        # Already ranked via the learned tier above (usually first).
+        return merged[:max_results]
 
-
-def suggest_with_learned_first(
-    token: str,
-    learned_db: sqlite3.Connection | None = None,
-    max_results: int = 10,
-) -> tuple[list[str], int]:
-    """
-    Like suggest(), but also returns the index of the default-highlighted item.
-    0 = first Arabic item (top of list from caller's perspective is Latin at index -1).
-    Returns (candidates, default_idx) where default_idx is 0-based into candidates.
-    """
-    candidates = suggest(token, learned_db, max_results)
-    learned = _learned_choice(token, learned_db)
-    if learned and candidates and candidates[0] == learned:
-        default_idx = 0
-    else:
-        default_idx = 0  # top Arabic candidate
-    return candidates, default_idx
+    # Not learned — Latin is always a reachable fallback. Reserve its slot
+    # within max_results rather than appending past the cap (callers rely
+    # on the cap as a hard limit).
+    result = merged[: max(max_results - 1, 0)]
+    result.append(token)
+    return result

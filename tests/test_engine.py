@@ -114,12 +114,14 @@ def test_kh_is_kha():
 # ---------------------------------------------------------------------------
 
 def test_standalone_number_arabic_indic():
+    # Arabic-Indic numeral ranks first; the plain digit stays reachable
+    # as a fallback (folded into the ranked list, not a separate slot).
     result = suggest("3")
-    assert result == ["٣"], f"expected ['٣'] for standalone '3', got {result}"
+    assert result == ["٣", "3"], f"expected ['٣', '3'] for standalone '3', got {result}"
 
 def test_standalone_number_4():
     result = suggest("4")
-    assert result == ["٤"]
+    assert result == ["٤", "4"]
 
 def test_number_in_word():
     # 3lash — 3 treated as letter, not digit
@@ -161,6 +163,33 @@ def test_single_s():
     assert "س" in results or any("س" in r for r in results[:3])
 
 
+def test_latin_fallback_ranked_not_pinned():
+    """The raw Latin token is folded into the same ranked list as Arabic
+    candidates: a low-priority fallback by default, promoted to the top
+    via the same learned-choice mechanism as any other pick — no special
+    'keep as Latin' sentinel or fixed slot."""
+    import sqlite3
+    from oktoboot.engine import suggest, record_choice
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute(
+        "CREATE TABLE choices (input TEXT NOT NULL, chosen TEXT NOT NULL, "
+        "count INTEGER DEFAULT 1, last_used INTEGER, PRIMARY KEY(input, chosen))"
+    )
+    db.commit()
+
+    before = suggest("iphone", db)
+    assert before, "expected at least the Latin fallback"
+    assert before[0] != "iphone", f"Latin shouldn't rank first before any learning, got {before}"
+    assert "iphone" in before, f"Latin should still be reachable as a fallback, got {before}"
+
+    record_choice("iphone", "iphone", db)
+    after = suggest("iphone", db)
+    assert after[0] == "iphone", f"learned 'keep as Latin' should rank first, got {after}"
+    assert after.count("iphone") == 1, f"should not duplicate, got {after}"
+
+
 def test_bug_regressions():
     """Regressions for bugs found by comparing against Yamli."""
     # Bad DODa entry: bgha→با was ranked above بغا
@@ -189,6 +218,19 @@ def test_bug_regressions():
     assert_first("fach", "فاش")
     assert_first("bach", "باش")
     assert_first("3lach", "علاش")
+    # Final long ā written as alef maqsura (ى) was unreachable entirely —
+    # no key in MAPPING produced ى, so no word ending in it (موسى، عيسى،
+    # متى، وتولى...) was ever a candidate at any rank. _FINAL_EXTRA fixed
+    # this generatively (no dictionary/override needed).
+    assert_first("moussa", "موسى")
+    assert_first("3issa", "عيسى")
+    assert_first("mata", "متى")
+    # "watawala" was the case that surfaced the bug: fixing reachability
+    # alone doesn't guarantee #1 (a same-length alternate reading, وطوال,
+    # is more "regular" and ranks first) — but the old len(token)-1 demotion
+    # rule buried وتولى outside the top 3 entirely under 8-glyph junk like
+    # واتاوالا. Top-3 is the meaningful guarantee here, not first place.
+    assert_top("watawala", "وتولى")
 
 
 if __name__ == "__main__":
