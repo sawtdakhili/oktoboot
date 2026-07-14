@@ -5,17 +5,35 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QIcon, QKeySequence, QAction
-from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QMainWindow, QMessageBox, QWidget,
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QAction, QActionGroup, QFont, QFontDatabase, QIcon, QKeySequence,
 )
+from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow
 
+from oktoboot import native_dialogs
 from oktoboot.editor import ArabicEditor
 from oktoboot.store import open_learned_db
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 FONT_DIR = DATA_DIR / "fonts"
+
+# Arabic-friendly fonts offered in the Format > Font submenu, in priority
+# order — same list _setup_font() auto-picks the default from. "serif" is
+# Qt's generic engine fallback, not a real installed family, so it's kept
+# unconditionally available rather than filtered against QFontDatabase.
+#
+# DecoType Naskh, Montaser Arabic, and Baghdad were dropped from this list —
+# checked via fontTools cmap inspection, none of them have a glyph for ڭ
+# (U+06AD, Moroccan gaf — the engine maps "g" to it as top choice). پ/ڤ
+# (p/v) are fine in all of them; ڭ is the one gap, but it's core, frequent
+# Darija, not an edge case, so offering those fonts here is a real trap.
+# Only Amiri and Geeza Pro cover the full Darija set.
+FONT_CHOICES = [
+    "Amiri",
+    "Geeza Pro",
+    "serif",
+]
 
 # ---------------------------------------------------------------------------
 # Colors (outrun-electric palette)
@@ -70,8 +88,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("oktoboot")
         self.resize(900, 700)
+
+        # Persisted preferences (font family/size across restarts)
+        self._settings = QSettings("oktoboot", "oktoboot")
+
+        # Kept alive while a native sheet (native_dialogs.show_sheet) is
+        # showing — without a Python reference, the NSAlert can be GC'd
+        # before its completion handler fires.
+        self._active_sheet = None
 
         # Seamless title bar on macOS
         self._setup_title_bar()
@@ -84,6 +109,8 @@ class MainWindow(QMainWindow):
         self._is_dirty = False
 
         self.setCentralWidget(self._editor)
+        self._update_window_title()
+
         self._setup_font()
         self._setup_menus()
 
@@ -99,8 +126,47 @@ class MainWindow(QMainWindow):
         self._recovery_path = Path.home() / "Library" / "Application Support" / "oktoboot" / "recovery.txt"
         self._recovery_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Restore recovery if exists
-        self._try_restore_recovery()
+        # Restoring recovery is deferred to after show() (see main()) — a
+        # sheet needs its parent window already on screen to attach to.
+
+        # ArabicEditor applies its initial RTL block formatting via its own
+        # QTimer.singleShot(0, ...) (queued above, during its construction).
+        # Qt's contentsChanged fires for that formatting-only change same as
+        # a real edit, marking the document dirty before the user has typed
+        # anything. Queued here — after that — to clear the false positive
+        # once it's already fired, without racing it.
+        QTimer.singleShot(0, self._clear_startup_dirty)
+
+    def _clear_startup_dirty(self) -> None:
+        self._is_dirty = False
+        self._set_document_edited(False)
+
+    def _update_window_title(self) -> None:
+        """
+        Native macOS document-window convention: the title bar shows just the
+        filename (no app name — that's what the menu bar is for), and a real
+        file gets a represented-filename proxy icon (draggable, Cmd-click for
+        the path breadcrumb), same as TextEdit/Notes/Pages.
+        """
+        name = self._current_file.name if self._current_file else "Untitled"
+        self.setWindowTitle(name)
+        try:
+            ns_window = native_dialogs.frontmost_ns_window()
+            if ns_window:
+                ns_window.setRepresentedFilename_(
+                    str(self._current_file) if self._current_file else ""
+                )
+        except Exception:
+            pass
+
+    def _set_document_edited(self, edited: bool) -> None:
+        """Native unsaved-changes indicator — the dot in the close button."""
+        try:
+            ns_window = native_dialogs.frontmost_ns_window()
+            if ns_window:
+                ns_window.setDocumentEdited_(edited)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
 
@@ -142,24 +208,23 @@ class MainWindow(QMainWindow):
             pass
 
     def _setup_font(self) -> None:
-        # Prefer Arabic serif fonts in priority order
-        preferred = [
-            "Amiri",          # if installed system-wide
-            "DecoType Naskh", # system font on macOS — classical Arabic serif
-            "Montaser Arabic",
-            "Baghdad",
-            "Geeza Pro",      # macOS system Arabic (sans but legible)
-            "serif",
-        ]
         available = QFontDatabase.families()
-        family = next((f for f in preferred if f in available), "serif")
+        default_family = next((f for f in FONT_CHOICES if f in available), "serif")
+        family = self._settings.value("font/family", default_family)
+        if family != "serif" and family not in available:
+            family = default_family
+        size = self._settings.value("font/size", 22, type=int)
 
-        font = QFont(family, 22)
+        font = QFont(family, size)
         font.setStyleStrategy(QFont.PreferAntialias)
         self._editor.setFont(font)
+        self._editor.set_font_size(size)  # syncs ArabicEditor._font_size bookkeeping
 
-        # Make the cursor visible — 2px wide, bright pink (Ghostty cursor colour)
-        self._editor.setCursorWidth(2)
+        # Cursor is custom-painted in ArabicEditor.paintEvent (pink/cyan by
+        # mode); setCursorWidth(0) there hides Qt's native caret. Do NOT
+        # set a nonzero cursor width here — it re-enables that native caret,
+        # which then blinks on its own timer, out of sync with ours,
+        # producing a white flicker alongside the real cursor.
         from PySide6.QtGui import QPalette, QColor
         palette = self._editor.palette()
         palette.setColor(QPalette.Text, QColor("#f2f3f7"))
@@ -177,6 +242,18 @@ class MainWindow(QMainWindow):
         fmt.setTopMargin(60)
         fmt.setBottomMargin(60)
         self._editor.document().rootFrame().setFrameFormat(fmt)
+
+    def _increase_font(self) -> None:
+        self._editor.increase_font()
+        self._settings.setValue("font/size", self._editor._font_size)
+
+    def _decrease_font(self) -> None:
+        self._editor.decrease_font()
+        self._settings.setValue("font/size", self._editor._font_size)
+
+    def _set_font_family(self, family: str) -> None:
+        self._editor.set_font_family(family)
+        self._settings.setValue("font/family", family)
 
     def _setup_menus(self) -> None:
         menu = self.menuBar()
@@ -213,39 +290,81 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self._save_file_as)
         file_menu.addAction(save_as_action)
 
-        # --- View menu ---
-        view_menu = menu.addMenu("View")
+        # --- Format menu (Font family/size — standard macOS location,
+        # matching TextEdit/Pages rather than tucking these under View) ---
+        format_menu = menu.addMenu("Format")
 
         bigger = QAction("Bigger Text", self)
         bigger.setShortcut(QKeySequence("Ctrl+="))
-        bigger.triggered.connect(self._editor.increase_font)
-        view_menu.addAction(bigger)
+        bigger.triggered.connect(self._increase_font)
+        format_menu.addAction(bigger)
 
         smaller = QAction("Smaller Text", self)
         smaller.setShortcut(QKeySequence("Ctrl+-"))
-        smaller.triggered.connect(self._editor.decrease_font)
-        view_menu.addAction(smaller)
+        smaller.triggered.connect(self._decrease_font)
+        format_menu.addAction(smaller)
+
+        format_menu.addSeparator()
+
+        font_menu = format_menu.addMenu("Font")
+        available = QFontDatabase.families()
+        current_family = self._editor.font().family()
+        font_group = QActionGroup(self)
+        font_group.setExclusive(True)
+        for family in FONT_CHOICES:
+            if family != "serif" and family not in available:
+                continue
+            label = "System Serif (fallback)" if family == "serif" else family
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(family == current_family)
+            action.triggered.connect(lambda checked, fam=family: self._set_font_family(fam))
+            font_group.addAction(action)
+            font_menu.addAction(action)
+
+        # --- View menu ---
+        view_menu = menu.addMenu("View")
+
+        # No QAction shortcut here — toggling is done via Shift+Tab in the
+        # editor (see ArabicEditor.keyPressEvent). This menu item is a
+        # visual indicator plus a mouse-clickable fallback.
+        arabizi_action = QAction("Arabizi Mode", self)
+        arabizi_action.setCheckable(True)
+        arabizi_action.setChecked(True)
+        arabizi_action.triggered.connect(self._editor.set_arabizi_enabled)
+        self._editor.arabizi_enabled_changed.connect(arabizi_action.setChecked)
+        view_menu.addAction(arabizi_action)
+
+    # ------------------------------------------------------------------
+    # Native sheets — see native_dialogs.py for why this bypasses Qt.
+
+    def _warn(self, message: str, informative: str = "") -> None:
+        self._active_sheet = native_dialogs.show_sheet(
+            native_dialogs.frontmost_ns_window(), message, informative, ["OK"],
+            on_response=lambda _: setattr(self, "_active_sheet", None),
+        )
 
     # ------------------------------------------------------------------
     # File operations
 
     def _new_file(self) -> None:
-        if not self._confirm_discard():
-            return
-        self._editor.clear()
-        self._current_file = None
-        self._is_dirty = False
-        self.setWindowTitle("oktoboot — Untitled")
+        def proceed() -> None:
+            self._editor.clear()
+            self._current_file = None
+            self._is_dirty = False
+            self._update_window_title()
+            self._set_document_edited(False)
+        self._confirm_discard(proceed)
 
     def _open_file(self) -> None:
-        if not self._confirm_discard():
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open", str(Path.home()),
-            "Text files (*.md *.txt *.org);;All files (*)"
-        )
-        if path:
-            self._load(Path(path))
+        def proceed() -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open", str(Path.home()),
+                "Text files (*.md *.txt *.org);;All files (*)"
+            )
+            if path:
+                self._load(Path(path))
+        self._confirm_discard(proceed)
 
     def _load(self, path: Path) -> None:
         try:
@@ -254,9 +373,10 @@ class MainWindow(QMainWindow):
             self._editor._force_rtl()
             self._current_file = path
             self._is_dirty = False
-            self.setWindowTitle(f"oktoboot — {path.name}")
+            self._update_window_title()
+            self._set_document_edited(False)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not open file:\n{e}")
+            self._warn("Could not open file", str(e))
 
     def _save_file(self) -> None:
         if self._current_file:
@@ -273,7 +393,7 @@ class MainWindow(QMainWindow):
             p = Path(path)
             self._write(p)
             self._current_file = p
-            self.setWindowTitle(f"oktoboot — {p.name}")
+            self._update_window_title()
 
     def _write(self, path: Path) -> None:
         try:
@@ -283,25 +403,35 @@ class MainWindow(QMainWindow):
                 self._editor.toPlainText(), encoding="utf-8"
             )
             self._is_dirty = False
-            self.setWindowTitle(f"oktoboot — {path.name}")
+            self._update_window_title()
+            self._set_document_edited(False)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Could not save file:\n{e}")
+            self._warn("Could not save file", str(e))
 
-    def _confirm_discard(self) -> bool:
+    def _confirm_discard(self, on_confirmed) -> None:
         if not self._is_dirty:
-            return True
-        reply = QMessageBox.question(
-            self, "Unsaved changes",
-            "You have unsaved changes. Discard them?",
-            QMessageBox.Discard | QMessageBox.Cancel,
+            on_confirmed()
+            return
+
+        def handle(button: str) -> None:
+            self._active_sheet = None
+            if button == "Discard":
+                on_confirmed()
+
+        # "Cancel" added first -> rightmost + default (Return-bound); Cocoa
+        # also auto-binds Escape to it regardless of position.
+        self._active_sheet = native_dialogs.show_sheet(
+            native_dialogs.frontmost_ns_window(),
+            "You have unsaved changes.", "Discard them?",
+            ["Cancel", "Discard"], handle,
         )
-        return reply == QMessageBox.Discard
 
     # ------------------------------------------------------------------
     # Auto-save and crash recovery
 
     def _on_content_changed(self) -> None:
         self._is_dirty = True
+        self._set_document_edited(True)
         # Write recovery file immediately
         try:
             self._recovery_path.write_text(
@@ -315,40 +445,64 @@ class MainWindow(QMainWindow):
             self._write(self._current_file)
 
     def _try_restore_recovery(self) -> None:
-        if self._recovery_path.exists():
-            content = self._recovery_path.read_text(encoding="utf-8").strip()
-            if content:
-                reply = QMessageBox.question(
-                    self, "Restore",
-                    "Unsaved text from a previous session was found. Restore it?",
-                    QMessageBox.Yes | QMessageBox.No,
-                )
-                if reply == QMessageBox.Yes:
-                    self._editor.setPlainText(content)
-                    self._is_dirty = True
+        if not self._recovery_path.exists():
+            return
+        content = self._recovery_path.read_text(encoding="utf-8").strip()
+        if not content:
+            return
 
-    def closeEvent(self, event) -> None:
-        if self._is_dirty:
-            reply = QMessageBox.question(
-                self, "Save before closing?",
-                "You have unsaved changes.",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-            )
-            if reply == QMessageBox.Save:
-                self._save_file()
-                if self._is_dirty:  # save failed
-                    event.ignore()
-                    return
-            elif reply == QMessageBox.Cancel:
-                event.ignore()
-                return
-        # Clear recovery file on clean exit
+        def handle(button: str) -> None:
+            self._active_sheet = None
+            if button == "Yes":
+                self._editor.setPlainText(content)
+                self._is_dirty = True
+                self._set_document_edited(True)
+
+        # "Yes" added first -> rightmost + default (Return-bound).
+        self._active_sheet = native_dialogs.show_sheet(
+            native_dialogs.frontmost_ns_window(),
+            "Unsaved text from a previous session was found.", "Restore it?",
+            ["Yes", "No"], handle, style="informational",
+        )
+
+    def _cleanup_recovery(self) -> None:
         try:
             if self._recovery_path.exists():
                 self._recovery_path.unlink()
         except Exception:
             pass
-        event.accept()
+
+    def closeEvent(self, event) -> None:
+        if not self._is_dirty:
+            self._cleanup_recovery()
+            event.accept()
+            return
+
+        event.ignore()  # sheet decides asynchronously; re-close() below if confirmed
+
+        def handle(button: str) -> None:
+            self._active_sheet = None
+            if button == "Save":
+                self._save_file()
+                if not self._is_dirty:  # save succeeded
+                    self._cleanup_recovery()
+                    self.close()
+            elif button == "Discard":
+                self._is_dirty = False
+                self._set_document_edited(False)
+                self._cleanup_recovery()
+                self.close()
+            # Cancel: leave the window open, do nothing further
+
+        name = self._current_file.name if self._current_file else "Untitled"
+        # Added in Save, Cancel, Discard order -> Cocoa lays them out
+        # right-to-left as Discard, Cancel, Save (Save rightmost + default).
+        self._active_sheet = native_dialogs.show_sheet(
+            native_dialogs.frontmost_ns_window(),
+            f"Do you want to save the changes you made to “{name}”?",
+            "Your changes will be lost if you don't save them.",
+            ["Save", "Cancel", "Discard"], handle,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +512,14 @@ def main() -> None:
     app.setApplicationName("oktoboot")
     app.setStyleSheet(STYLE)
 
+    # Register the bundled Amiri font — it's shipped in data/fonts/ but not
+    # installed system-wide, so without this QFontDatabase.families() never
+    # contains "Amiri" and _setup_font()'s auto-pick silently falls through
+    # to DecoType Naskh, which (unlike Amiri) has no glyph for ڭ (U+06AD,
+    # Moroccan gaf) or other Darija-specific letters.
+    for font_path in FONT_DIR.glob("*.ttf"):
+        QFontDatabase.addApplicationFont(str(font_path))
+
     icon_path = DATA_DIR / "icon.icns"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -366,6 +528,9 @@ def main() -> None:
     window.show()
     # Title bar must be called after show() so the NSWindow handle exists
     window._setup_title_bar()
+    # Recovery-restore sheet also needs the window already on screen to
+    # attach to (see MainWindow._try_restore_recovery).
+    window._try_restore_recovery()
     sys.exit(app.exec())
 
 
