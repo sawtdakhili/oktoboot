@@ -12,6 +12,12 @@ Two post-processing steps the raw SVG needs:
   2. The pink-on-near-black linework is low-contrast at small sizes, so we give
      it a modest contrast/saturation/brightness boost.
 
+The tentacle/pen artwork is meant to touch the tile's edges (bleed to the
+edge is the intended design) — only the *tile itself* is scaled down within
+the full canvas, matching how macOS's own icons leave transparent padding
+around their tile. Don't also inset the artwork within the tile — tried that
+once, it read as the drawing floating with a big margin, not as intended.
+
 Everything is rendered once at high resolution and downscaled with LANCZOS, so
 the flood-filled corners come out smoothly anti-aliased at every size.
 
@@ -30,6 +36,13 @@ ICNS = ROOT / "data" / "icon.icns"
 MASTER = 2048                       # render/process once at this size, then downscale
 CORNER_THRESH = 330                 # sum-of-channel tolerance for the white flood-fill
 CONTRAST, COLOR, BRIGHT = 1.45, 1.35, 1.12
+
+# macOS (Big Sur+) icons sit inside ~80.5% of their canvas with transparent
+# padding around them (Apple's keyline shape is 824.53pt of a 1024pt canvas).
+# The traced SVG fills its canvas edge-to-edge, so without this the icon
+# reads visibly larger than every other app's icon in the Dock/Cmd+Tab
+# switcher. Scale the artwork down and center it to match.
+CONTENT_SCALE = 824.53 / 1024
 
 # Apple iconset: (filename, pixel size)
 TARGETS = [
@@ -65,7 +78,13 @@ def build_master() -> Image.Image:
     im = ImageEnhance.Contrast(im).enhance(CONTRAST)
     im = ImageEnhance.Color(im).enhance(COLOR)
     im = ImageEnhance.Brightness(im).enhance(BRIGHT)
-    return im
+
+    content_size = round(w * CONTENT_SCALE)
+    im = im.resize((content_size, content_size), Image.LANCZOS)
+    padded = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    offset = (w - content_size) // 2
+    padded.paste(im, (offset, offset), im)
+    return padded
 
 
 def main() -> None:
