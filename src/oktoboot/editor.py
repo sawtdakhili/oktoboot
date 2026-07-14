@@ -13,7 +13,13 @@ Interaction model (Yamli-parity):
   - Up / Down    → scroll through popup (all candidates, no "more" link)
   - Click item   → accept that suggestion
   - Backspace    → remove last composing char, update popup
-  - Popup hides when app loses focus; does NOT reopen on refocus click
+  - Scrolling to a suggestion then typing more letters pins it: the new
+    list ranks candidates starting with that suggestion first
+  - A half-typed word survives an app switch: the popup hides while the
+    app is inactive and reappears (same word, same suggestions) as soon
+    as the app is active again. An Escape-dismissed popup stays dismissed
+    across a switch. Clicks on committed words right after refocus do NOT
+    reopen their re-edit popup
 """
 
 from __future__ import annotations
@@ -65,6 +71,25 @@ def _looks_like_url(token: str) -> bool:
         t.startswith("http") or t.startswith("www") or
         "://" in t or t.startswith("ftp")
     )
+
+# Folds letter-forms that commonly change when a word grows a suffix, so a
+# pinned prefix (see ArabicEditor._pinned_prefix) can still match after the
+# engine legitimately respells the earlier letters — e.g. ة becomes ت under
+# a suffix (مدرسة → مدرستي), hamza carriers vary (أ/إ/آ → ا), ى becomes ي.
+_FOLD_MAP = str.maketrans({
+    "أ": "ا", "إ": "ا", "آ": "ا",
+    "ى": "ي", "ة": "ت",
+})
+
+def _fold(s: str) -> str:
+    return s.translate(_FOLD_MAP)
+
+# Arabic letters that can be absorbed/dropped when a word grows past them
+# (a vowel-carrying final letter turning into an internal short vowel) —
+# used as the last-resort pin tier below. ى (alef maksura, U+0649) is a
+# distinct codepoint from ي (yeh, U+064A) — both are weak finals and must
+# be listed, or common continuations like دى→دار silently fall through.
+_ABSORBABLE_FINALS = set("اويةأى")
 
 # Max visible rows in popup before scroll kicks in
 POPUP_MAX_ROWS = 6
@@ -168,6 +193,10 @@ class SuggestionPopup(QFrame):
         self._items: list[str] = []
         self._latin_token: str = ""
         self._current_idx: int = 0
+        # True once the user has scrolled the highlight away from the
+        # default — the editor uses this to pin their choice when they
+        # keep typing (see ArabicEditor._pinned_prefix).
+        self._user_navigated: bool = False
 
     # ------------------------------------------------------------------
 
@@ -178,6 +207,7 @@ class SuggestionPopup(QFrame):
         self._items = candidates
         self._latin_token = latin_token
         self._current_idx = 0
+        self._user_navigated = False
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -218,8 +248,26 @@ class SuggestionPopup(QFrame):
         if not n:
             return
         self._current_idx = (self._current_idx + delta) % n
+        self._user_navigated = True
         self._list.setCurrentRow(self._current_idx)
         self._list.scrollToItem(self._list.item(self._current_idx))
+
+    def was_navigated(self) -> bool:
+        return self._user_navigated
+
+    def select_item(self, text: str) -> bool:
+        """Move the highlight to the row showing `text` — used to restore
+        a user-scrolled selection after an app switch. Counts as user
+        navigation (so typing more letters still pins it, same as if the
+        user had scrolled here themselves). False if the item is gone."""
+        for i in range(self._list.count()):
+            if self._list.item(i).text() == text:
+                self._current_idx = i
+                self._user_navigated = True
+                self._list.setCurrentRow(i)
+                self._list.scrollToItem(self._list.item(i))
+                return True
+        return False
 
     def current_text(self) -> str | None:
         item = self._list.currentItem()
@@ -284,6 +332,18 @@ class ArabicEditor(QTextEdit):
         # Set when re-editing a previously committed word (via click or
         # backspace-over-separator); None for a fresh compose.
         self._reedit_entry: CommittedWord | None = None
+        # Suggestion the user scrolled to before typing more letters.
+        # Candidates starting with it are ranked (and highlighted) first
+        # on the next popup, so the chosen rendering of the earlier
+        # letters is kept.
+        self._pinned_prefix: str | None = None
+        # True when the popup was open at the moment the app deactivated —
+        # it's restored on reactivation (an Escape-dismissed popup is not).
+        self._restore_popup_on_activate: bool = False
+        # The suggestion the user had scrolled to when the app deactivated,
+        # so the restored popup highlights it again instead of resetting to
+        # the top item. None when the highlight was still the default.
+        self._restore_highlight: str | None = None
 
         # Committed words, tracked with self-adjusting cursors (see
         # CommittedWord) so re-edit positions stay correct as surrounding
@@ -489,6 +549,21 @@ class ArabicEditor(QTextEdit):
             self._apply_rtl_to_current_block()
             return
 
+        # Modifier keys alone (Shift, Alt, Cmd/Ctrl) — don't commit. Checked
+        # before the Cmd/Ctrl-held block below: macOS delivers a bare-Cmd
+        # keydown (Key_Control, ControlModifier already set) the instant the
+        # user presses Cmd to start Cmd+Tab, and that must NOT commit the
+        # composing word — otherwise app-switch preservation (focusOutEvent,
+        # _on_app_state_changed) never gets a chance to run, since the word
+        # was already committed before focus was even lost.
+        MODIFIERS = {
+            Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta,
+            Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock,
+        }
+        if key in MODIFIERS:
+            super().keyPressEvent(event)
+            return
+
         # If Cmd or Ctrl is held (shortcuts like Cmd+A, Cmd+V, Cmd+C, Cmd+Z),
         # commit composing word and let Qt handle the shortcut — never compose
         if mods & (Qt.ControlModifier | Qt.AltModifier):
@@ -500,15 +575,6 @@ class ArabicEditor(QTextEdit):
         # Printable character
         if text and text.isprintable():
             self._handle_char(text)
-            return
-
-        # Modifier keys alone (Shift, Alt, Cmd) — don't commit
-        MODIFIERS = {
-            Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta,
-            Qt.Key_CapsLock, Qt.Key_NumLock, Qt.Key_ScrollLock,
-        }
-        if key in MODIFIERS:
-            super().keyPressEvent(event)
             return
 
         # Truly unknown key (arrows, Home, End, etc.) — commit then pass through
@@ -548,6 +614,10 @@ class ArabicEditor(QTextEdit):
         # Reset blink on keystroke so cursor stays visible while typing
         self._cursor_visible = True
         self._cursor_timer.start()
+        # Typing after scrolling to a suggestion pins that suggestion:
+        # the extended word's candidates keep it as their start.
+        if self._composing and self._popup.isVisible() and self._popup.was_navigated():
+            self._pinned_prefix = self._popup.current_text()
         if not self._composing:
             self._composing = True
             self._compose_start = self.textCursor().position()
@@ -577,6 +647,41 @@ class ArabicEditor(QTextEdit):
         if not candidates:
             self._popup.hide()
             return
+
+        # Keep candidates matching the pinned suggestion first (stable),
+        # so the rendering the user scrolled to stays highlighted as the
+        # word grows. The engine often legitimately respells the earlier
+        # letters once the word is longer (ة→ت under a suffix, hamza
+        # carrier swaps, a vowel-carrying final letter absorbed into an
+        # internal vowel) — an exact match would silently lose the pin in
+        # those cases, so three progressively looser tiers are tried in
+        # order and the first one with any hits wins. No hits in any tier
+        # falls back to the engine's own order.
+        if self._pinned_prefix:
+            pin = self._pinned_prefix
+            # (matcher, needle) pairs, loosest match tried only if tighter
+            # ones find nothing:
+            #   1. exact prefix match
+            #   2. letter-form folded on both sides (ة/ت, hamza carriers, ى/ي)
+            #   3. folded, with the pin's absorbable final letter dropped
+            #      (a vowel-carrying final letter turning into an internal
+            #      short vowel as the word grows, e.g. مو → مصطفى)
+            tiers = [
+                (lambda c: c, pin),
+                (_fold, _fold(pin)),
+            ]
+            if len(pin) >= 2 and pin[-1] in _ABSORBABLE_FINALS:
+                tiers.append((_fold, _fold(pin[:-1])))
+
+            pinned: list[str] = []
+            for fold_fn, needle in tiers:
+                pinned = [c for c in candidates if fold_fn(c).startswith(needle)]
+                if pinned:
+                    break
+
+            if pinned:
+                rest = [c for c in candidates if c not in pinned]
+                candidates = pinned + rest
 
         self._popup.populate(self._compose_token, candidates)
         pos = self._cursor_viewport_pos()
@@ -637,6 +742,9 @@ class ArabicEditor(QTextEdit):
         self._compose_start = -1
         self._compose_token = ""
         self._reedit_entry = None
+        self._pinned_prefix = None
+        self._restore_popup_on_activate = False
+        self._restore_highlight = None
         self._popup.hide()
 
     # ------------------------------------------------------------------
@@ -765,14 +873,42 @@ class ArabicEditor(QTextEdit):
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
-        if self._composing:
-            self._commit_latin()
+        # Switching to another app (Cmd+Tab, clicking another window)
+        # keeps the half-typed word composing — and remembers that its
+        # popup was open, so _on_app_state_changed can restore it on
+        # return. Captured here, not in _on_app_state_changed: this
+        # focus-out fires (and hides the popup) BEFORE the app-state
+        # signal, so sampling isVisible() there would always see False.
+        # Losing focus to something inside the app still commits.
+        if event.reason() in (Qt.ActiveWindowFocusReason, Qt.PopupFocusReason):
+            if self._popup.isVisible() and self._composing:
+                self._restore_popup_on_activate = True
+                if self._popup.was_navigated():
+                    self._restore_highlight = self._popup.current_text()
+        else:
+            if self._composing:
+                self._commit_latin()
         self._popup.hide()
         self._was_focused = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         first_click_after_refocus = not self._was_focused
         self._was_focused = True
+        if first_click_after_refocus and self._composing:
+            # The click that brings the window back while a half-typed
+            # word is pending: swallow it and put the caret back at the
+            # end of the compose. Letting it through would reposition
+            # the cursor, and _on_cursor_moved would commit the word —
+            # exactly the "came back and my letters were forgotten"
+            # bug. A deliberate second click still moves the caret
+            # (and commits) as usual.
+            end = (self._reedit_entry.end() if self._reedit_entry is not None
+                   else self._compose_start + len(self._compose_token))
+            cursor = self.textCursor()
+            cursor.setPosition(end)
+            self.setTextCursor(cursor)
+            event.accept()
+            return
         super().mousePressEvent(event)
         if not first_click_after_refocus:
             # Only check re-edit on deliberate clicks (not refocus clicks)
@@ -796,9 +932,26 @@ class ArabicEditor(QTextEdit):
     def _on_app_state_changed(self, state) -> None:
         from PySide6.QtCore import Qt as _Qt
         if state != _Qt.ApplicationActive:
+            # Hide the popup but keep the compose state — the half-typed
+            # word (and its popup, restored below) survive the app switch.
+            # _restore_popup_on_activate was captured in focusOutEvent
+            # (which fires first); it distinguishes "hidden because we
+            # switched away" from "user dismissed it with Escape before
+            # switching" — only the former is restored on return.
+            if self._popup.isVisible() and self._composing:
+                self._restore_popup_on_activate = True
+                if self._popup.was_navigated():
+                    self._restore_highlight = self._popup.current_text()
             self._popup.hide()
-            if self._composing:
-                self._commit_latin()
+        else:
+            if (self._restore_popup_on_activate
+                    and self._composing and self._compose_token
+                    and not _looks_like_url(self._compose_token)):
+                self._show_popup()
+                if self._restore_highlight:
+                    self._popup.select_item(self._restore_highlight)
+            self._restore_popup_on_activate = False
+            self._restore_highlight = None
 
     # ------------------------------------------------------------------
     # Cursor moved — hide popup if cursor left composing range

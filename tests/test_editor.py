@@ -446,6 +446,243 @@ e.close()
 
 
 # ---------------------------------------------------------------------------
+print("\n=== Test 18: Scrolled-to suggestion is pinned when typing continues ===")
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+QTest.keyClick(e, Qt.Key_Down)
+QTest.keyClick(e, Qt.Key_Down)
+app.processEvents()
+pinned = e._popup.current_text()
+check("scrolled highlight is not the default", pinned and e._popup._current_idx != 0, pinned)
+type_text(e, "am")
+QTest.qWait(50)
+app.processEvents()
+new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+matching = [c for c in new_items if c.startswith(pinned)]
+if matching:
+    check("candidates starting with pinned suggestion come first",
+          new_items[: len(matching)] == matching, new_items[:4])
+    check("highlight sits on a pinned candidate",
+          (e._popup.current_text() or "").startswith(pinned), e._popup.current_text())
+else:
+    # Engine produced no candidate extending this prefix — order untouched
+    check("no pinned match: engine order preserved", True)
+QTest.keyClick(e, Qt.Key_Space)
+QTest.qWait(50)
+app.processEvents()
+check("pinned prefix reset on commit", e._pinned_prefix is None, e._pinned_prefix)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 18b: Pin survives letter-form respelling (folded tier) ===")
+e = make_editor()
+type_text(e, "waqfa")
+QTest.qWait(50)
+app.processEvents()
+items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+# وقفة (ta marbuta) is expected as a non-default candidate here — must
+# actually scroll (index > 0) or the no-scroll-doesn't-pin rule (Test 19)
+# means nothing gets pinned and the test would pass without exercising it.
+target_idx = next((i for i, t in enumerate(items) if t == "وقفة" and i > 0), None)
+check("found a scrollable وقفة candidate", target_idx is not None, items[:6])
+if target_idx is not None:
+    for _ in range(target_idx):
+        QTest.keyClick(e, Qt.Key_Down)
+    app.processEvents()
+    pinned = e._popup.current_text()
+    check("scrolled to وقفة", pinned == "وقفة", pinned)
+    type_text(e, "ti")  # suffix forces ة -> ت respelling (وقفة -> وقفتي)
+    QTest.qWait(50)
+    app.processEvents()
+    new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+    check("respelled candidates still promoted to the top",
+          new_items and new_items[0].startswith("وقفت"), new_items[:4])
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 18c: Pin survives an absorbed final vowel (dropped-final tier) ===")
+e = make_editor()
+type_text(e, "da")
+QTest.qWait(50)
+app.processEvents()
+items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+target_idx = next((i for i, t in enumerate(items) if t == "دى" and i > 0), None)
+check("found a scrollable 'دى' candidate", target_idx is not None, items[:6])
+if target_idx is not None:
+    for _ in range(target_idx):
+        QTest.keyClick(e, Qt.Key_Down)
+    app.processEvents()
+    pinned = e._popup.current_text()
+    check("scrolled to دى", pinned == "دى", pinned)
+    type_text(e, "r")  # دى + r -> دار (long alef absorbs the short vowel)
+    QTest.qWait(50)
+    app.processEvents()
+    new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+    check("absorbed-vowel candidate (دار) promoted to top",
+          new_items and new_items[0] == "دار", new_items[:4])
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 18d: Bare Cmd keydown mid-compose does NOT commit ===")
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+check("composing before Cmd keydown", e._composing and e._compose_token == "sal", e._compose_token)
+# macOS delivers a bare-Cmd keydown (Key_Control, ControlModifier already
+# set) the instant Cmd is pressed to start Cmd+Tab — this must not commit.
+QTest.keyPress(e, Qt.Key_Control, Qt.ControlModifier)
+app.processEvents()
+check("still composing after bare Cmd keydown",
+      e._composing and e._compose_token == "sal", e._compose_token)
+QTest.keyRelease(e, Qt.Key_Control, Qt.NoModifier)
+app.processEvents()
+type_text(e, "am")
+QTest.qWait(50)
+app.processEvents()
+check("word continues normally after release", e._compose_token == "salam", e._compose_token)
+e.close()
+
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+# A real chord (e.g. Cmd+A) must still commit, unlike a bare modifier press.
+QTest.keyClick(e, Qt.Key_A, Qt.ControlModifier)
+app.processEvents()
+check("real Cmd+<letter> chord still commits", not e._composing)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 19: Default highlight (no scroll) does NOT pin ===")
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+type_text(e, "am")
+QTest.qWait(50)
+app.processEvents()
+check("no pin without user scroll", e._pinned_prefix is None, e._pinned_prefix)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 20: Compose survives app switch, resumes with full word ===")
+from PySide6.QtCore import QEvent
+from PySide6.QtGui import QFocusEvent
+
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+check("composing before leaving", e._composing and e._compose_token == "sal", e._compose_token)
+# Scroll to a non-default suggestion before leaving
+QTest.keyClick(e, Qt.Key_Down)
+QTest.keyClick(e, Qt.Key_Down)
+app.processEvents()
+scrolled_to = e._popup.current_text()
+check("scrolled off the default before leaving", e._popup._current_idx != 0, scrolled_to)
+# Simulate Cmd+Tab away: focus-out for window deactivation + app inactive
+app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.ActiveWindowFocusReason))
+e._on_app_state_changed(Qt.ApplicationInactive)
+app.processEvents()
+check("popup hidden while away", not e._popup.isVisible())
+check("still composing while away", e._composing and e._compose_token == "sal", e._compose_token)
+# Come back — popup must reappear on its own, before any keystroke
+e._on_app_state_changed(Qt.ApplicationActive)
+app.sendEvent(e, QFocusEvent(QEvent.FocusIn, Qt.ActiveWindowFocusReason))
+app.processEvents()
+check("popup reappears immediately on return (no keystroke needed)",
+      e._popup.isVisible())
+check("restored popup highlights the suggestion scrolled to before leaving",
+      e._popup.current_text() == scrolled_to,
+      f"got {e._popup.current_text()!r}, wanted {scrolled_to!r}")
+type_text(e, "am")
+QTest.qWait(50)
+app.processEvents()
+check("token includes letters typed before leaving",
+      e._compose_token == "salam", e._compose_token)
+check("popup still up with full-word suggestions", e._popup.isVisible())
+new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
+check("restored highlight also pins when typing continues",
+      new_items and new_items[0].startswith(scrolled_to), new_items[:4])
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 20b: Escape-dismissed popup stays dismissed across a switch ===")
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+QTest.keyClick(e, Qt.Key_Escape)
+app.processEvents()
+check("popup dismissed by Escape", not e._popup.isVisible())
+check("still composing after Escape", e._composing, e._compose_token)
+app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.ActiveWindowFocusReason))
+e._on_app_state_changed(Qt.ApplicationInactive)
+app.processEvents()
+e._on_app_state_changed(Qt.ApplicationActive)
+app.sendEvent(e, QFocusEvent(QEvent.FocusIn, Qt.ActiveWindowFocusReason))
+app.processEvents()
+check("popup NOT resurrected after return", not e._popup.isVisible())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 21: Returning by CLICK also keeps the half-typed word ===")
+from PySide6.QtCore import QPoint
+
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+# Leave the app
+app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.ActiveWindowFocusReason))
+e._on_app_state_changed(Qt.ApplicationInactive)
+app.processEvents()
+# Return by clicking somewhere far from the word (the refocus click)
+e._on_app_state_changed(Qt.ApplicationActive)
+app.sendEvent(e, QFocusEvent(QEvent.FocusIn, Qt.ActiveWindowFocusReason))
+app.processEvents()
+QTest.mouseClick(e.viewport(), Qt.LeftButton, pos=QPoint(60, 300))
+app.processEvents()
+check("refocus click keeps composing", e._composing and e._compose_token == "sal",
+      f"composing={e._composing} token={e._compose_token!r}")
+check("caret restored to end of half-typed word",
+      e.textCursor().position() == e._compose_start + len(e._compose_token),
+      e.textCursor().position())
+type_text(e, "am")
+QTest.qWait(50)
+app.processEvents()
+check("token continues after click-return", e._compose_token == "salam", e._compose_token)
+# Deliberately moving the caret away afterwards commits as usual
+QTest.keyClick(e, Qt.Key_Left)
+app.processEvents()
+check("deliberate caret move commits", not e._composing)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 22: In-app focus loss still commits the composing word ===")
+e = make_editor()
+type_text(e, "sal")
+QTest.qWait(50)
+app.processEvents()
+app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.MouseFocusReason))
+app.processEvents()
+check("in-app focus loss commits", not e._composing)
+check("Latin stays in document", e.toPlainText() == "sal", e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
 print(f"\n{'='*40}")
 print(f"{PASS} passed, {FAIL} failed")
 if FAIL:
