@@ -21,21 +21,25 @@ oktoboot is offline-first, Moroccan-first, and open source.
 - **Moroccan Darija first** — كيفاش، واش، بزاف، ديال directly from the DODa dictionary
 - **Moroccan-specific conventions** — `ch`→ش, `j`→ج, `g`→ڭ, `9`→ق, `8`→ه, `kh`→خ
 - **Numbers as letters** — `3`→ع, `7`→ح, `9`→ق in words; stay as digits when standalone
-- **Persistent learning** — choices are remembered permanently (unlike Yamli which forgets on close)
+- **Persistent learning** — every choice (Arabic or "keep as Latin") is remembered permanently and ranks accordingly next time (unlike Yamli which forgets on close)
+- **Arabizi on/off toggle** — Shift+Tab switches to plain Latin typing (URLs, emails, English) without fighting suggestions word by word
 - **RTL text, right-aligned**, with proper BiDi for mixed Arabic/Latin text
 - **Auto-save** every 30 seconds + crash recovery
 - **Saves to** `.md`, `.txt`, `.org`
 - **Cmd+W** to close, **Cmd+S** to save, **Cmd+±** for font size
+- **Font family picker** (Format menu) — Amiri or Geeza Pro; both are the only bundled/system options that cover the full Darija letter set (ڭ included)
 
 ## Keyboard shortcuts
 
 | Keys | Action |
 |------|--------|
 | Space | Accept highlighted suggestion |
-| Shift+Space | Keep word as Latin |
+| Shift+Space | Keep word as Latin (this choice is remembered, and ranks higher next time) |
+| Shift+Tab | Toggle Arabizi mode on/off |
 | Enter / Tab | Accept suggestion (no space) |
 | Escape | Dismiss suggestions, keep Latin |
 | ↑ / ↓ | Navigate suggestions |
+| Click a committed word | Re-open it for editing |
 | Cmd+= | Bigger text |
 | Cmd+- | Smaller text |
 | Cmd+W | Close |
