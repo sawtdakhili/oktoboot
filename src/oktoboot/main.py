@@ -455,6 +455,7 @@ class MainWindow(QMainWindow):
             self._active_sheet = None
             if button == "Yes":
                 self._editor.setPlainText(content)
+                self._editor._force_rtl()
                 self._is_dirty = True
                 self._set_document_edited(True)
 

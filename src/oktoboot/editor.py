@@ -481,6 +481,24 @@ class ArabicEditor(QTextEdit):
         self.setTextCursor(cursor)
 
     # ------------------------------------------------------------------
+    # Copy — carry RTL direction into plain-text paste targets. Qt's
+    # default rich-text (HTML) clipboard flavor already marks each
+    # paragraph dir='rtl', but a paste target that only reads the
+    # plain-text flavor (or a mostly-empty secondary rich-text flavor
+    # some apps prefer) gets no directional signal at all and may guess
+    # left — confirmed live: oktoboot → TextEdit pasted left-aligned.
+    # Every document here is always RTL (see _force_rtl /
+    # _apply_rtl_to_current_block), so this applies unconditionally.
+
+    def createMimeDataFromSelection(self):
+        mime = super().createMimeDataFromSelection()
+        if mime.hasText():
+            RLM = "‏"  # Right-to-Left Mark — invisible, zero width
+            marked = RLM + mime.text().replace("\n", "\n" + RLM)
+            mime.setText(marked)
+        return mime
+
+    # ------------------------------------------------------------------
     # Key handling
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

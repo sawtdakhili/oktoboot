@@ -683,6 +683,46 @@ e.close()
 
 
 # ---------------------------------------------------------------------------
+print("\n=== Test 23: Copied plain text carries an RTL mark ===")
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+type_text(e, "wach")
+QTest.keyClick(e, Qt.Key_Space)
+QTest.qWait(50)
+app.processEvents()
+cursor = e.textCursor()
+cursor.select(QTextCursor.Document)
+e.setTextCursor(cursor)
+mime = e.createMimeDataFromSelection()
+RLM = "‏"
+copied = mime.text()
+check("copied plain text starts with the RTL mark", copied.startswith(RLM), repr(copied))
+check("copied text still contains the original words",
+      copied.replace(RLM, "") == e.toPlainText(), repr(copied))
+e.close()
+
+# Multi-paragraph: each line should get its own mark, not just the first.
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+QTest.keyClick(e, Qt.Key_Return)
+type_text(e, "wach")
+QTest.keyClick(e, Qt.Key_Space)
+QTest.qWait(50)
+app.processEvents()
+cursor = e.textCursor()
+cursor.select(QTextCursor.Document)
+e.setTextCursor(cursor)
+mime = e.createMimeDataFromSelection()
+copied = mime.text()
+lines = copied.split("\n")
+check("multi-line copy: every line starts with the RTL mark",
+      len(lines) >= 2 and all(l.startswith(RLM) for l in lines if l), repr(copied))
+e.close()
+
+
+# ---------------------------------------------------------------------------
 print(f"\n{'='*40}")
 print(f"{PASS} passed, {FAIL} failed")
 if FAIL:
