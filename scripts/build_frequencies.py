@@ -20,23 +20,22 @@ ROOT = Path(__file__).parent.parent
 DB_PATH = ROOT / "data" / "frequencies.db"
 FONT_DIR = ROOT / "data" / "fonts"
 
+# Pinned to exact commits so two builds always produce the same data (and so
+# the same rankings). To update a source, bump its commit and record why in
+# DECISIONS.md.
+FREQ_COMMIT = "525f9b560de45753a5ea01069454e72e9aa541c6"   # 2022-02-07
+AMIRI_COMMIT = "6331fc82b0d20d9439a0792e21a9294ca015a93f"  # 2026-04-25
+
 FREQ_URL = (
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/"
-    "master/content/2018/ar/ar_full.txt"
+    f"{FREQ_COMMIT}/content/2018/ar/ar_full.txt"
 )
 
-AMIRI_URLS = {
-    "Amiri-Regular.ttf": (
-        "https://github.com/aliftype/amiri/releases/download/1.000/"
-        "Amiri-1.000.zip"
-    ),
-}
-# We'll fetch from the releases zip; fallback to direct file URLs
 AMIRI_DIRECT = {
     "Amiri-Regular.ttf":
-        "https://github.com/aliftype/amiri/raw/main/fonts/Amiri-Regular.ttf",
+        f"https://github.com/aliftype/amiri/raw/{AMIRI_COMMIT}/fonts/Amiri-Regular.ttf",
     "Amiri-Bold.ttf":
-        "https://github.com/aliftype/amiri/raw/main/fonts/Amiri-Bold.ttf",
+        f"https://github.com/aliftype/amiri/raw/{AMIRI_COMMIT}/fonts/Amiri-Bold.ttf",
 }
 
 
@@ -53,11 +52,14 @@ def build_frequencies():
         DB_PATH.unlink()
 
     conn = sqlite3.connect(DB_PATH)
+    # WITHOUT ROWID: the table is stored as its primary-key index, so the
+    # word lookup needs no second copy of every word. (The old layout plus an
+    # extra idx_word index stored each word three times — ~180 MB vs ~60 MB.)
     conn.execute("""
         CREATE TABLE frequencies (
             word      TEXT PRIMARY KEY,
             frequency INTEGER NOT NULL
-        )
+        ) WITHOUT ROWID
     """)
 
     batch = []
@@ -83,8 +85,8 @@ def build_frequencies():
         "INSERT OR IGNORE INTO frequencies(word, frequency) VALUES (?, ?)",
         batch
     )
-    conn.execute("CREATE INDEX idx_word ON frequencies(word)")
     conn.commit()
+    conn.execute("VACUUM")
 
     count = conn.execute("SELECT COUNT(*) FROM frequencies").fetchone()[0]
     conn.close()

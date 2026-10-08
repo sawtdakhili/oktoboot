@@ -31,11 +31,15 @@ FOLDERS = [
 # sentences.csv has a different format (full sentences, not word pairs) — skip for now
 
 REPO = "darija-open-dataset/dataset"
+# Pinned to an exact commit so two builds always produce the same data.
+# This is the commit that was current when data/doda.db was first built
+# (2026-06). To update, bump it and record why in DECISIONS.md.
+DODA_COMMIT = "f4dd4004578959497a0411a6a63b203e8c806127"  # 2025-10-06
 
 
 def list_csvs(folder: str) -> list[str]:
     result = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/contents/{folder}", "--jq", ".[].name"],
+        ["gh", "api", f"repos/{REPO}/contents/{folder}?ref={DODA_COMMIT}", "--jq", ".[].name"],
         capture_output=True, text=True
     )
     return [f for f in result.stdout.strip().splitlines() if f.endswith(".csv")]
@@ -43,7 +47,7 @@ def list_csvs(folder: str) -> list[str]:
 
 def fetch_csv(folder: str, filename: str) -> str:
     result = subprocess.run(
-        ["gh", "api", f"repos/{REPO}/contents/{folder}/{filename}", "--jq", ".content"],
+        ["gh", "api", f"repos/{REPO}/contents/{folder}/{filename}?ref={DODA_COMMIT}", "--jq", ".content"],
         capture_output=True, text=True
     )
     import base64

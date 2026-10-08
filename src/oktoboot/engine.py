@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Sequence
@@ -22,7 +23,16 @@ from typing import Sequence
 # Paths
 # ---------------------------------------------------------------------------
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+def _data_dir() -> Path:
+    """`data/` next to the source tree when run from source; inside the
+    bundle when frozen by PyInstaller (which unpacks to sys._MEIPASS)."""
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle:
+        return Path(bundle) / "data"
+    return Path(__file__).parent.parent.parent / "data"
+
+
+DATA_DIR = _data_dir()
 DODA_DB = DATA_DIR / "doda.db"
 FREQ_DB = DATA_DIR / "frequencies.db"
 

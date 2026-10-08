@@ -14,9 +14,11 @@ Run tests before touching engine.py or editor.py — engine/comprehensive/extend
 
 Plain Tab with no popup open inserts a literal tab character (Qt's default `QTextEdit` behavior, intentionally left as-is) — user explicitly wants this; treats it as a "big space" / validation key rather than a bug. Don't re-add a Tab-swallowing fix without asking first — tried once 2026-07-14, reverted same day.
 
-**Next up:**
-1. Tabs — multiple open documents
-2. Harakat/tashkil mode — vowel diacritics toggle
-3. Screenshot for README — once UI is more complete, populate with a poem
-4. Phase 5 — `.app` bundle via PyInstaller
-5. `moustafa`→مصطفى gap — "ou" can't be absorbed as a short vowel; "mostafa" works
+**Decisions:** `DECISIONS.md` — append-only; read it before changing engine ranking, saving, or data builds.
+
+**Next up (ship before tabs/harakat — decided 2026-10-08, see DECISIONS.md):**
+1. Editor bugs that damage text — backspace/click re-edit, rich paste, apostrophe keys (3'/9'/7'), Option+Backspace
+2. Engine quality — deterministic order, rank unknowns by mapping not length, doubled letters (+shadda option), ة end-only, medial أ only on `2` or real word; 100-word Darija test list run with `learned_db=None`
+3. Package as `.app` (PyInstaller), unsigned
+4. Release: zipped `.app` on GitHub Releases + cask in own tap `sawtdakhili/homebrew-tap`; README gets the "Open Anyway" steps (see DECISIONS.md)
+5. After shipping: tabs, harakat/tashkil mode, README screenshot, `moustafa`→مصطفى gap

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,9 +15,9 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow
 
 from oktoboot import native_dialogs
 from oktoboot.editor import ArabicEditor
+from oktoboot.engine import DATA_DIR
 from oktoboot.store import open_learned_db
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
 FONT_DIR = DATA_DIR / "fonts"
 
 # Arabic-friendly fonts offered in the Format > Font submenu, in priority
@@ -107,6 +109,9 @@ class MainWindow(QMainWindow):
         self._editor = ArabicEditor(learned_db=self._learned_db)
         self._current_file: Path | None = None
         self._is_dirty = False
+        # Files whose pre-session version was already copied to .bak
+        # (see _write).
+        self._backed_up: set[Path] = set()
 
         self.setCentralWidget(self._editor)
         self._update_window_title()
@@ -397,11 +402,19 @@ class MainWindow(QMainWindow):
 
     def _write(self, path: Path) -> None:
         try:
-            path.write_text(self._editor.toPlainText(), encoding="utf-8")
-            # Backup
-            path.with_suffix(path.suffix + ".bak").write_text(
-                self._editor.toPlainText(), encoding="utf-8"
-            )
+            # Backup: the file as it was BEFORE this session first saved
+            # over it — once per file per session. Rewriting it on every
+            # save (autosave runs every 30s) would leave a .bak holding the
+            # same damage as the file within a minute.
+            if path not in self._backed_up and path.exists():
+                shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+            self._backed_up.add(path)
+
+            # Write to a temp file, then swap it in: a crash mid-write
+            # leaves the old file intact instead of a truncated one.
+            tmp = path.with_name(f".{path.name}.oktoboot-tmp")
+            tmp.write_text(self._editor.toPlainText(), encoding="utf-8")
+            os.replace(tmp, path)
             self._is_dirty = False
             self._update_window_title()
             self._set_document_edited(False)
