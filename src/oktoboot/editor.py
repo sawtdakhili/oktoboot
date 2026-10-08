@@ -490,13 +490,40 @@ class ArabicEditor(QTextEdit):
     # Every document here is always RTL (see _force_rtl /
     # _apply_rtl_to_current_block), so this applies unconditionally.
 
+    RLM = "‏"  # Right-to-Left Mark — invisible, zero width
+
     def createMimeDataFromSelection(self):
         mime = super().createMimeDataFromSelection()
         if mime.hasText():
-            RLM = "‏"  # Right-to-Left Mark — invisible, zero width
-            marked = RLM + mime.text().replace("\n", "\n" + RLM)
+            marked = self.RLM + mime.text().replace("\n", "\n" + self.RLM)
             mime.setText(marked)
         return mime
+
+    # ------------------------------------------------------------------
+    # Paste / drop — plain text only. Rich text from a web page or another
+    # app would bring its own colours, fonts and left-to-right paragraphs
+    # into a document that's always plain RTL. The RTL marks our own copy
+    # adds (above) are stripped so they don't pile up in saved files.
+
+    def insertFromMimeData(self, source) -> None:
+        if not source.hasText():
+            return
+        text = source.text().replace(self.RLM, "")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        cursor = self.textCursor()
+        cursor.beginEditBlock()  # one undo step for paste + formatting
+        start = cursor.selectionStart()  # insertText replaces any selection
+        cursor.insertText(text, QTextCharFormat())
+        end = cursor.position()
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+        fmt = QTextBlockFormat()
+        fmt.setAlignment(Qt.AlignLeft)       # = visual right for RTL
+        fmt.setLayoutDirection(Qt.RightToLeft)
+        cursor.mergeBlockFormat(fmt)
+        cursor.endEditBlock()
+        cursor.clearSelection()
+        self.setTextCursor(cursor)
 
     # ------------------------------------------------------------------
     # Key handling
@@ -545,6 +572,13 @@ class ArabicEditor(QTextEdit):
                     self._accept_suggestion(choice)
                 return
             if key == Qt.Key_Space:
+                if (not mods & Qt.ShiftModifier and self._reedit_entry is None
+                        and len(self._compose_token) > 1
+                        and self._compose_token.endswith("'")):
+                    # salam' + Space: closing quote, handled with the
+                    # other word-enders (see _handle_char).
+                    self._handle_char(" ")
+                    return
                 if mods & Qt.ShiftModifier:
                     self._accept_suggestion(self._compose_token)
                 else:
@@ -556,6 +590,16 @@ class ArabicEditor(QTextEdit):
 
         # Backspace
         if key == Qt.Key_Backspace:
+            if mods & (Qt.AltModifier | Qt.ControlModifier):
+                # Option+Backspace (delete word) / Cmd+Backspace (delete
+                # to line start): finish any compose, then let Qt do the
+                # real deletion instead of our one-character backspace.
+                if self._reedit_entry is not None:
+                    self._reset_compose_state()
+                elif self._composing:
+                    self._commit_latin()
+                super().keyPressEvent(event)
+                return
             self._handle_backspace()
             return
 
@@ -608,19 +652,41 @@ class ArabicEditor(QTextEdit):
             self._insert_char(ch)
             return
 
+        # An apostrophe typed mid-word is a letter, not punctuation: the
+        # engine maps 3'→غ, 9'→ض, 7'→خ, 6'→ظ, and a bare ' to ع/ء. Outside
+        # a word (an opening quote) it stays punctuation, below.
+        if ch == "'" and self._composing and not _looks_like_url(self._compose_token):
+            self._begin_or_extend_compose(ch)
+            return
+
         # Any word-ending character commits the composing word first
         if ch in WORD_ENDERS:
             if self._composing:
                 token = self._compose_token
+                closing_quote = (token.endswith("'") and len(token) > 1
+                                 and self._reedit_entry is None)
+                if closing_quote:
+                    # salam' + space: the trailing ' was a closing quote,
+                    # not a letter. Take it off the compose (and off the
+                    # screen for now — the caret stays inside the compose
+                    # range, so _on_cursor_moved doesn't fire a commit);
+                    # it's re-inserted after the converted word below.
+                    cursor = self.textCursor()
+                    cursor.deletePreviousChar()
+                    self.setTextCursor(cursor)
+                    token = token[:-1]
+                    self._compose_token = token
                 # URL tokens stay Latin — no conversion
                 if _looks_like_url(token):
                     choice = token
-                elif self._popup.isVisible():
+                elif self._popup.isVisible() and not closing_quote:
                     choice = self._popup.current_text() or token
                 else:
                     candidates = engine.suggest(token, self._learned_db)
                     choice = candidates[0] if candidates else token
                 self._accept_suggestion(choice)
+                if closing_quote:
+                    self._insert_char("'")
 
             # Insert either the Arabic equivalent or the char as-is
             self._insert_char(PUNCT_MAP.get(ch, ch))
@@ -636,6 +702,10 @@ class ArabicEditor(QTextEdit):
         # the extended word's candidates keep it as their start.
         if self._composing and self._popup.isVisible() and self._popup.was_navigated():
             self._pinned_prefix = self._popup.current_text()
+        if self._composing and self._reedit_entry is not None:
+            # Typing into a reopened word: edit its Latin, not the Arabic.
+            # If the word went stale, fall through to a fresh compose.
+            self._reedit_to_latin()
         if not self._composing:
             self._composing = True
             self._compose_start = self.textCursor().position()
@@ -755,6 +825,41 @@ class ArabicEditor(QTextEdit):
                 return w
         return None
 
+    def _reedit_to_latin(self) -> bool:
+        """
+        First real edit (a typed letter or a backspace) during a re-edit:
+        swap the committed word back to its Latin token on screen, then
+        continue as a fresh compose, so the keystroke edits Latin letters,
+        never the Arabic word itself. Just reopening a word (click, or
+        backspace over the following space) and then leaving or escaping
+        doesn't call this, so the word stays untouched.
+
+        False if the word no longer matches what's in the document (e.g.
+        an intervening undo): the re-edit is cancelled and nothing changes.
+        """
+        entry = self._reedit_entry
+        if entry is None:
+            return True
+        if not entry.is_valid():
+            self._reset_compose_state()
+            return False
+        start, end, latin = entry.start(), entry.end(), entry.latin
+        self._remove_words_overlapping(start, end)
+        # State first: the text swap below moves the caret, and
+        # _on_cursor_moved must already see a fresh compose over [start,
+        # start+len(latin)] or it would commit/cancel mid-swap.
+        self._reedit_entry = None
+        self._compose_start = start
+        self._compose_token = latin
+        swap = QTextCursor(self.document())
+        swap.setPosition(start)
+        swap.setPosition(end, QTextCursor.KeepAnchor)
+        swap.insertText(latin)
+        caret = self.textCursor()
+        caret.setPosition(start + len(latin))
+        self.setTextCursor(caret)
+        return True
+
     def _reset_compose_state(self) -> None:
         self._composing = False
         self._compose_start = -1
@@ -834,6 +939,13 @@ class ArabicEditor(QTextEdit):
         self.setTextCursor(cursor)
 
     def _insert_space(self) -> None:
+        # Accepting a word that already has a space after it (re-editing
+        # mid-sentence): step over that space instead of doubling it.
+        cursor = self.textCursor()
+        if self.document().characterAt(cursor.position()) == " ":
+            cursor.movePosition(QTextCursor.NextCharacter)
+            self.setTextCursor(cursor)
+            return
         self._insert_char(" ")
 
     # ------------------------------------------------------------------
@@ -845,6 +957,12 @@ class ArabicEditor(QTextEdit):
                 QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier)
             )
             return
+
+        if self._composing and self._reedit_entry is not None:
+            # Backspace into a reopened word: edit its Latin, never delete
+            # a letter of the Arabic word. A stale word just cancels.
+            if not self._reedit_to_latin():
+                return
 
         if self._composing and self._compose_token:
             # Remove last Latin composing char

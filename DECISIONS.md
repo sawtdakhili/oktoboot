@@ -45,3 +45,11 @@ Saad doesn't mind macOS's "Open Anyway" step, so there's no paid Apple Developer
 - **GitHub Releases:** an unsigned, zipped `oktoboot.app`. The README gives the real first-launch steps: open once → System Settings → Privacy & Security → Open Anyway. Right-click → Open no longer works for this on macOS 15+.
 - **Own Homebrew tap** (`sawtdakhili/homebrew-tap`, installed with `brew install --cask sawtdakhili/tap/oktoboot`): a cask that downloads that same release zip. It does not strip the quarantine flag, so users get the same "Open Anyway" step. The main Homebrew catalogue isn't possible: since 2026-09-01 it disables casks that fail Gatekeeper.
 - Rejected: a tap formula that builds the app on the user's Mac. It avoids the block, but installs are slow and it's an extra build recipe to maintain (rule 1).
+
+## 2026-10-08 — Editor: text-damaging bugs fixed
+
+- **Re-editing a word goes through its Latin.** Reopening a word (click, or backspace over the space after it) still leaves it untouched; Escape or moving away changes nothing. The first typed letter or backspace swaps the Arabic back to its Latin token, and from there it's a normal compose. Typed letters go at the end of the Latin, wherever the click landed. Before: backspace deleted an Arabic letter and typing put Latin inside the Arabic word.
+- **Space after a re-edited word steps over an existing space** instead of adding a second one.
+- **Apostrophe inside a word is a letter** (`3'`→غ, `9'`→ض, `7'`→خ, `ma'na`→معنا). At the start of a word, or at its end before a space or punctuation, it stays a quote mark (`'salam'` → `'سلام'`). Trade-off: a word can't end in an apostrophe-letter; use `3` or `2` for that.
+- **Option+Backspace / Cmd+Backspace** use the normal macOS word/line delete.
+- **Paste and drag-and-drop are plain text**, every pasted line is RTL, and the invisible RTL marks our own Copy adds are stripped. One Undo removes the whole paste.

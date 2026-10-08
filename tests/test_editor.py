@@ -190,11 +190,9 @@ e.close()
 
 
 # ---------------------------------------------------------------------------
-# Re-editing means picking a DIFFERENT suggestion for the same token (arrow
-# keys + Enter) — not clearing and retyping a whole new word. Backspacing
-# past the originally-clicked token doesn't delete real text (the cursor
-# sits before the untouched committed word), so it can't shrink the word
-# itself; that's a separate, pre-existing limitation out of scope here.
+# Re-editing by picking a DIFFERENT suggestion for the same token (arrow
+# keys + Enter). Typing or backspacing in a reopened word is covered by
+# Test 24.
 
 print("\n=== Test 7: Re-editing an earlier word doesn't break a later word's click ===")
 e = make_editor()
@@ -719,6 +717,129 @@ copied = mime.text()
 lines = copied.split("\n")
 check("multi-line copy: every line starts with the RTL mark",
       len(lines) >= 2 and all(l.startswith(RLM) for l in lines if l), repr(copied))
+e.close()
+
+
+# ---------------------------------------------------------------------------
+# A reopened word is edited through its Latin token: the first typed letter
+# or backspace swaps the Arabic back to Latin, then it's a normal compose.
+# Before 2026-10-08, backspace deleted an Arabic letter and typing inserted
+# Latin into the middle of the Arabic word.
+print("\n=== Test 24: Typing / backspacing in a reopened word edits its Latin ===")
+
+def reopen_at(e, pos):
+    cursor = e.textCursor()
+    cursor.setPosition(pos)
+    e.setTextCursor(cursor)
+    e._was_focused = True
+    e._check_click_reopen()
+    app.processEvents()
+
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+QTest.keyClick(e, Qt.Key_Backspace)   # reopens salam
+QTest.keyClick(e, Qt.Key_Backspace)   # edits it to "sala"
+app.processEvents()
+check("backspace in reopened word shrinks the Latin token",
+      e._compose_token == "sala" and e.toPlainText() == "sala",
+      (e._compose_token, e.toPlainText()))
+top = e._popup.current_text()
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("accepting gives sala's suggestion, not a damaged سلام",
+      top and e.toPlainText() == top + " ", (top, e.toPlainText()))
+e.close()
+
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+type_text(e, "wach")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+second = e.toPlainText().split(" ")[1]
+reopen_at(e, 2)  # mid-word click
+type_text(e, "a")
+check("typing in a clicked word appends to its Latin",
+      e._compose_token == "salama" and e.toPlainText().startswith("salama "),
+      (e._compose_token, e.toPlainText()))
+top = e._popup.current_text()
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("accepting mid-sentence doesn't double the space",
+      e.toPlainText() == f"{top} {second} ", e.toPlainText())
+e.close()
+
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+before = e.toPlainText()
+reopen_at(e, 2)
+QTest.keyClick(e, Qt.Key_Escape)
+app.processEvents()
+check("reopen + Escape leaves the word untouched", e.toPlainText() == before, e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 25: Apostrophe inside a word is a letter, around it a quote ===")
+for word, expected in (("3'ali", "غالي"), ("9'arb", "ضارب")):
+    e = make_editor()
+    type_text(e, word)
+    QTest.keyClick(e, Qt.Key_Space)
+    app.processEvents()
+    check(f"{word} → {expected}", e.toPlainText() == expected + " ", e.toPlainText())
+    e.close()
+
+e = make_editor()
+type_text(e, "'salam'")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+text = e.toPlainText()
+check("quotes around a word stay quotes", text.startswith("'") and text.endswith("' ")
+      and "'" not in text[1:-2], text)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 26: Option+Backspace deletes a whole word ===")
+e = make_editor()
+e.set_arabizi_enabled(False)
+type_text(e, "hello world")
+QTest.keyClick(e, Qt.Key_Backspace, Qt.AltModifier)
+app.processEvents()
+check("Option+Backspace removes 'world'", e.toPlainText() == "hello ", e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 27: Paste is plain RTL text ===")
+from PySide6.QtCore import QMimeData
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+before = e.toPlainText()
+md = QMimeData()
+md.setHtml('<p dir="ltr" style="color:red">hello</p><p>second</p>')
+md.setText(RLM + "hello\n" + RLM + "second")
+e.insertFromMimeData(md)
+app.processEvents()
+dirs, colours = [], []
+b = e.document().begin()
+while b.isValid():
+    dirs.append(b.blockFormat().layoutDirection())
+    it = b.begin()
+    if not it.atEnd():
+        colours.append(it.fragment().charFormat().foreground().color().name())
+    b = b.next()
+check("every pasted line is RTL", all(d == Qt.RightToLeft for d in dirs), dirs)
+check("pasted colour not carried over", "#ff0000" not in colours, colours)
+check("our own RTL marks are stripped on paste", RLM not in e.toPlainText(), repr(e.toPlainText()))
+e.document().undo()
+app.processEvents()
+check("one undo removes the whole paste", e.toPlainText() == before, e.toPlainText())
 e.close()
 
 
