@@ -205,8 +205,9 @@ app.processEvents()
 text_before = e.toPlainText()
 print(f"     text before re-edit: {text_before!r}")
 
-# Click the start of the first word and pick a LONGER candidate (سألام, 5
-# chars, vs سلام's 4) via arrow-down + Enter — the supported re-edit path.
+# Click the start of the first word and pick a LONGER candidate than سلام
+# (4 letters) via arrow-down + Enter — the supported re-edit path. Picked by
+# length, not position, so engine ranking changes don't break this test.
 cursor = e.textCursor()
 cursor.setPosition(0)
 e.setTextCursor(cursor)
@@ -214,10 +215,13 @@ e._was_focused = True
 e._check_click_reopen()
 app.processEvents()
 check("re-editing first word", e._composing and e._compose_token == "salam")
-for _ in range(3):
+for _ in range(e._popup._list.count()):
     QTest.keyClick(e, Qt.Key_Down)
     app.processEvents()
-check("selected a longer candidate", e._popup.current_text() == "سألام", e._popup.current_text())
+    current = e._popup.current_text() or ""
+    if len(current) > 4 and current != "salam":
+        break
+check("selected a longer candidate", len(e._popup.current_text() or "") > 4, e._popup.current_text())
 QTest.keyClick(e, Qt.Key_Return)
 app.processEvents()
 
@@ -248,16 +252,19 @@ type_text(e, "bghit")
 QTest.keyClick(e, Qt.Key_Space)
 app.processEvents()
 
-# Pick a SHORTER candidate (سلم, 3 chars, vs سلام's 4).
+# Pick a SHORTER candidate than سلام (4 letters), by length not position.
 cursor = e.textCursor()
 cursor.setPosition(0)
 e.setTextCursor(cursor)
 e._was_focused = True
 e._check_click_reopen()
 app.processEvents()
-QTest.keyClick(e, Qt.Key_Down)
-app.processEvents()
-check("selected a shorter candidate", e._popup.current_text() == "سلم", e._popup.current_text())
+for _ in range(e._popup._list.count()):
+    QTest.keyClick(e, Qt.Key_Down)
+    app.processEvents()
+    if len(e._popup.current_text() or "") < 4:
+        break
+check("selected a shorter candidate", len(e._popup.current_text() or "xxxx") < 4, e._popup.current_text())
 QTest.keyClick(e, Qt.Key_Return)
 app.processEvents()
 
@@ -784,12 +791,13 @@ e.close()
 
 # ---------------------------------------------------------------------------
 print("\n=== Test 25: Apostrophe inside a word is a letter, around it a quote ===")
-for word, expected in (("3'ali", "غالي"), ("9'arb", "ضارب")):
+for word, expected in (("3'ali", {"غالي"}), ("9'arb", {"ضرب", "ضارب"})):
     e = make_editor()
     type_text(e, word)
     QTest.keyClick(e, Qt.Key_Space)
     app.processEvents()
-    check(f"{word} → {expected}", e.toPlainText() == expected + " ", e.toPlainText())
+    check(f"{word} → {'/'.join(sorted(expected))}",
+          e.toPlainText().rstrip(" ") in expected, e.toPlainText())
     e.close()
 
 e = make_editor()

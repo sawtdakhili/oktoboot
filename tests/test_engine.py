@@ -206,8 +206,9 @@ def test_bug_regressions():
     assert_first("ma", "ما")
     # DODa returned علا before على
     assert_first("3la", "على")
-    # Expansion absorbed 'a' before 'n': شكرن instead of شكران
-    assert_first("chokran", "شكران")
+    # Final "an" is tanwin: شكراً, then شكرا, then the literal شكران
+    # (Saad, 2026-10-08 — replaced the July "شكران first" override).
+    assert suggest("chokran")[:3] == ["شكراً", "شكرا", "شكران"], suggest("chokran")[:3]
     # Expansion absorbed final 'a': عليه instead of عليها
     assert_first("3liha", "عليها")
     # Generative produced space-separated "و لكن"; fixed to ولكن

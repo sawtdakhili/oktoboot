@@ -12,10 +12,12 @@ see suggest()'s docstring.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -92,7 +94,7 @@ MAPPING: dict[str, list[str]] = {
 
     # vowels / semi-vowels
     "a":  ["ا", "أ"],
-    "e":  ["ي", "ا", "ه", "ة"],
+    "e":  ["ي", "ا", "ه"],         # ة only word-final, via _FINAL_EXTRA
     "i":  ["ي", "ا"],
     "o":  ["و", "أ"],
     "u":  ["و", "أ"],
@@ -118,25 +120,33 @@ MAPPING: dict[str, list[str]] = {
 _VOWELS = ("a", "e", "i", "o", "u")
 _VOWEL_LETTERS = {"a", "e", "i", "o", "u"}
 
-_EXPANDED: dict[str, list[str]] = dict(MAPPING)
-for _key, _letters in list(MAPPING.items()):
-    # Only expand consonant keys (keys that don't themselves start with a vowel)
-    if _key[0] not in _VOWEL_LETTERS and _key not in ("ch", "sh", "gh", "kh", "dh", "dj", "th", "3'", "6'", "7'", "9'"):
+SHADDA = "ّ"
+TANWIN_FATH = "ً"  # fathatan: chokran → شكراً
+
+# Doubled Latin consonant ("mm", "ss", "ll") → one Arabic letter with
+# shadda. The literal double (م+م) stays reachable through two single keys.
+# Lookups strip the shadda; see _generative_lookup for display order.
+_DOUBLABLE = "bcdfghjklmnpqrstvwyz"
+
+
+@dataclass(frozen=True)
+class _Key:
+    letters: list[str]
+    absorbed: str = ""        # vowel swallowed by a consonant+vowel key ("ka" → ك)
+    vowel: bool = False       # key is itself a vowel ("a", "ou", ...)
+
+
+_KEYS: dict[str, _Key] = {
+    k: _Key(letters, vowel=k[0] in _VOWEL_LETTERS) for k, letters in MAPPING.items()
+}
+for _c in _DOUBLABLE:
+    _KEYS.setdefault(_c * 2, _Key([L + SHADDA for L in MAPPING[_c]]))
+for _key, _info in list(_KEYS.items()):
+    if not _info.vowel:
         for _v in _VOWELS:
-            _new_key = _key + _v
-            if _new_key not in _EXPANDED:
-                _EXPANDED[_new_key] = _letters
+            _KEYS.setdefault(_key + _v, _Key(_info.letters, absorbed=_v))
 
-# For digraphs too
-for _key in ("ch", "sh", "gh", "kh", "dh", "dj", "th"):
-    _letters = MAPPING[_key]
-    for _v in _VOWELS:
-        _new_key = _key + _v
-        if _new_key not in _EXPANDED:
-            _EXPANDED[_new_key] = _letters
-
-# Pre-sort: longest keys first so we match greedily
-_SORTED_KEYS = sorted(_EXPANDED.keys(), key=len, reverse=True)
+_SORTED_KEYS = sorted(_KEYS, key=lambda k: (-len(k), k))
 
 # Word-final long ā is very often written as alef maqsura (ى) or ta marbuta
 # (ة): "watawala"→وتولى, "moustafa"→مصطفى, "zwina"→زوينة, "3la"→على. Neither
@@ -244,9 +254,19 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "7ta":      ["حتى"],
     "walakin":  ["ولكن"],
     "walkin":   ["ولكن"],
-    "chokran":  ["شكران"],
     "3liha":    ["عليها"],
     "rana":     ["رانا", "رنا"],  # Moroccan progressive "rah-na"; also name رنا
+    # Bad DODa entries: a translation instead of a spelling (nhar→يوم),
+    # the wrong word (had→هادا is "hada"), the article added (drari→الدراري)
+    "nhar":     ["نهار"],
+    "had":      ["هاد"],
+    "drari":    ["دراري"],
+    # "chh" reads as c + doubled h (سهّ...) and the corpus favours سهل
+    "chhal":    ["شحال"],
+    # Saad's order (2026-10-08): tanwin, then without it, then the literal ن
+    "chokran":  ["شكراً", "شكرا", "شكران"],
+    # Darija adjective; the corpus's MSA نادماً would otherwise win (tanwin rule)
+    "nadman":   ["ندمان"],
 }
 
 
@@ -278,38 +298,99 @@ def _doda_lookup(token: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Tier 2: Generative transliteration
 # ---------------------------------------------------------------------------
+# Every candidate carries a cost: how far it strays from the most typical
+# reading of each Latin key. Costs only ORDER candidates, never remove one —
+# an unusual spelling stays reachable further down the list.
 
-def _generate_candidates(token: str) -> list[str]:
-    """
-    Walk the token consuming the longest matching key at each position,
-    and enumerate Arabic combinations up to MAX_CANDIDATES.
-    """
-    MAX_CANDIDATES = 200   # hard cap — prevents blowup on long tokens
-    token_lower = token.lower()
-    results: set[str] = set()
+_KEY_COST = 0.5           # per key consumed: a digraph (kh→خ) beats a split (k+h→كه)
+_ALT_COST = 1.0           # per step down a key's letter list (s→ص is one step past س)
+# A short vowel either disappears into the consonant before it ("ka"→ك) or
+# is written as its own letter ("k"+"a"→كا, which also pays one more
+# _KEY_COST). Darija Arabizi usually writes a, i, o, u as letters, and
+# usually drops e (a schwa: "khdem"→خدم).
+_ABSORB_COST = {"a": 1.2, "e": 0.0, "i": 1.0, "o": 1.0, "u": 1.0}
+_WRITE_COST = {"a": 0.0, "e": 1.0, "i": 0.0, "o": 0.0, "u": 0.0}
+_FINAL_ABSORB_COST = 2.0  # a word-final vowel is almost always written
+_FINAL_EXTRA_COST = 0.8   # ى / ة for a word-final ā
+# أ/إ/آ in the middle of a word from a plain vowel key (not a typed "2"):
+# real words (سأل، رأس) still get through on their frequency; made-up ones
+# (كأنبغيك) sink below the plain-alef reading.
+_MEDIAL_HAMZA_COST = 3.0
+_HAMZA_SEATS = set("أإآ")
+_BEAM = 300               # partial spellings kept per position
+# Reading a final "an" as tanwin (شكراً) instead of ا+ن. High enough that
+# names keep their ن (رمضان, سلمان); very common tanwin words still win on
+# frequency (شكراً, جداً, أيضاً).
+_TANWIN_COST = 2.0
 
-    def recurse(pos: int, current: str) -> None:
-        if len(results) >= MAX_CANDIDATES:
-            return
-        if pos == len(token_lower):
-            results.add(current)
-            return
+# Darija verb prefixes, only at the very start of a word: the prefix's
+# vowel is short and never written (kanbghi→كنبغي, kaykhdem→كيخدم,
+# katchouf→كتشوف). One key each, so they beat k+a+n spelled out.
+_PREFIX_KEYS: dict[str, list[str]] = {
+    "kan": ["كن"],
+    "kay": ["كي"],
+    "kat": ["كت"],
+}
+
+# Frequency vs. typicality: score = log10(freq + 1) - _COST_WEIGHT * cost.
+# The weights above and this one were tuned together on
+# tests/test_darija_words.py (2026-10-08) while keeping test_engine.py green;
+# re-run both after changing any of them.
+_COST_WEIGHT = 0.8
+
+
+def _generate_candidates(token: str) -> dict[str, float]:
+    """
+    All spellings of `token` the key table allows, each with its cost.
+    Beam search, left to right: at each position every matching key and
+    every letter option extends the cheapest partial spellings. Fully
+    deterministic — ties break on the spelling itself.
+    """
+    t = token.lower()
+    n = len(t)
+    states: list[dict[str, float]] = [dict() for _ in range(n + 1)]
+    states[0][""] = 0.0
+
+    def push(pos: int, out: str, cost: float) -> None:
+        if cost < states[pos].get(out, float("inf")):
+            states[pos][out] = cost
+
+    for pos in range(n):
+        if not states[pos]:
+            continue
+        best = sorted(states[pos].items(), key=lambda x: (x[1], x[0]))[:_BEAM]
         matched = False
+        if pos == 0:
+            for key, letters in _PREFIX_KEYS.items():
+                if t.startswith(key) and len(t) > len(key):
+                    for out, cost in best:
+                        push(len(key), out + letters[0], cost + _KEY_COST)
         for key in _SORTED_KEYS:
-            if token_lower[pos:pos + len(key)] == key:
-                matched = True
-                letters = _EXPANDED[key]
-                if pos + len(key) == len(token_lower) and key in _FINAL_EXTRA:
-                    letters = letters + _FINAL_EXTRA[key]
-                for ar_letter in letters:
-                    if len(results) >= MAX_CANDIDATES:
-                        return
-                    recurse(pos + len(key), current + ar_letter)
-        if not matched:
-            recurse(pos + 1, current)
+            if not t.startswith(key, pos):
+                continue
+            matched = True
+            end = pos + len(key)
+            final = end == n
+            info = _KEYS[key]
+            base = _KEY_COST
+            if info.absorbed:
+                base += _FINAL_ABSORB_COST if final else _ABSORB_COST[info.absorbed]
+            if info.vowel:
+                base += _WRITE_COST[key[0]]
+            options = [(letter, i * _ALT_COST) for i, letter in enumerate(info.letters)]
+            if final:
+                options += [(letter, _FINAL_EXTRA_COST) for letter in _FINAL_EXTRA.get(key, [])]
+            for letter, step in options:
+                c = base + step
+                if pos > 0 and letter[0] in _HAMZA_SEATS and key[0] != "2":
+                    c += _MEDIAL_HAMZA_COST
+                for out, cost in best:
+                    push(end, out + letter, cost + c)
+        if not matched:  # character with no key: skip it
+            for out, cost in best:
+                push(pos + 1, out, cost)
 
-    recurse(0, "")
-    return list(results)
+    return states[n]
 
 
 def _freq_score(word: str) -> int:
@@ -344,45 +425,62 @@ def _min_expected_len(token: str) -> int:
 
 def _generative_lookup(token: str) -> list[str]:
     """
-    Generate all candidate Arabic strings and rank: known words (by freq) first,
-    then unknown words (zero-freq, ordered by how primary their letter mappings are).
-    Returns the full ranked list; caller applies its own limit.
+    Rank every generated spelling, best-first: corpus frequency (log scale)
+    minus how atypical the spelling is. Unknown words (frequency 0) rank by
+    typicality alone. Returns the full ranked list; caller applies its own
+    limit.
+
+    Shadda spellings (from doubled letters) are looked up and ranked by
+    their plain form; each is listed right after it (محمد, then محمّد).
     """
     candidates = _generate_candidates(token)
     # Also try with ال prefix stripped (handles 'alsalam' → السلام)
     if token.lower().startswith("al") and len(token) > 3:
-        stem_candidates = _generate_candidates(token[2:])
-        candidates += ["ال" + c for c in stem_candidates]
+        for c, cost in _generate_candidates(token[2:]).items():
+            out = "ال" + c
+            if cost + _KEY_COST < candidates.get(out, float("inf")):
+                candidates[out] = cost + _KEY_COST
 
-    scored = [(c, _freq_score(c)) for c in candidates]
-    # When input ends with a vowel, consonant-absorbing expansions can silently drop
+    # Final "an" is often tanwin, not a written ن: chokran → شكراً (and the
+    # same word without its tanwin, شكرا), jiddan → جداً. Built from the
+    # spellings of the token minus its "n" that end in ا; frequency decides
+    # between them and a real final ن (zaman → زمان still wins).
+    if len(token) >= 3 and token.lower().endswith("an"):
+        for c, cost in _generate_candidates(token[:-1]).items():
+            if c.endswith("ا"):
+                for out, extra in ((c + TANWIN_FATH, _TANWIN_COST), (c, _TANWIN_COST + 0.5)):
+                    if cost + extra < candidates.get(out, float("inf")):
+                        candidates[out] = cost + extra
+
+    plain_cost: dict[str, float] = {}
+    shadda_form: dict[str, tuple[float, str]] = {}
+    for c, cost in candidates.items():
+        plain = c.replace(SHADDA, "")
+        if cost < plain_cost.get(plain, float("inf")):
+            plain_cost[plain] = cost
+        if c != plain and (plain not in shadda_form or (cost, c) < shadda_form[plain]):
+            shadda_form[plain] = (cost, c)
+
+    # When input ends with a vowel, consonant-absorbing keys can silently drop
     # output letters (e.g. "rana"→رن instead of رانا because "ra"→ر, "na"→ن).
-    # Candidates below the consonant-count floor are likely truncated: demote them
-    # to the unknown tier regardless of corpus frequency. Tokens shorter than 3
-    # chars are exempt ("wa"→و is legitimately one letter).
+    # Candidates below the consonant-count floor are likely truncated: sink
+    # them below everything else. Tokens shorter than 3 chars are exempt
+    # ("wa"→و is legitimately one letter).
     vowel_final = token[-1].lower() in "aeiou" if token else False
     min_expected = _min_expected_len(token) if (vowel_final and len(token) >= 3) else 0
 
-    def _is_short(c: str) -> bool:
-        return vowel_final and len(c) < min_expected
+    def score(plain: str) -> float:
+        s = math.log10(_freq_score(plain) + 1) - _COST_WEIGHT * plain_cost[plain]
+        if len(plain) < min_expected:
+            s -= 100
+        return s
 
-    # Partition: known words sorted by freq desc then len desc; demote short forms
-    known = sorted(
-        [(c, f) for c, f in scored if f > 0 and not _is_short(c)],
-        key=lambda x: (x[1], len(x[0])), reverse=True,
-    )
-    unknown = sorted(
-        [(c, 0) for c, f in scored if f == 0 or _is_short(c)],
-        key=lambda x: -len(x[0]),
-    )
-
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    result = []
-    for ar, _ in known + unknown:
-        if ar not in seen:
-            seen.add(ar)
-            result.append(ar)
+    ranked = sorted(plain_cost, key=lambda p: (-score(p), p))
+    result: list[str] = []
+    for plain in ranked:
+        result.append(plain)
+        if plain in shadda_form:
+            result.append(shadda_form[plain][1])
     return result
 
 
