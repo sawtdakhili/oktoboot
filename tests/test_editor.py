@@ -77,11 +77,11 @@ check("composing after 'salam'", e._composing)
 check("compose_token = 'salam'", e._compose_token == "salam", e._compose_token)
 check("popup visible", e._popup.isVisible())
 popup_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
-# Latin is folded into the ranked list, not a fixed slot — it should still
-# be present (reachable), but not necessarily first.
-check("Latin token still reachable in the list", "salam" in popup_items, popup_items[:3])
-check("index 0 is Arabic (ranked ahead of the Latin fallback)", popup_items and any('؀' <= c <= 'ۿ' for c in popup_items[0]), popup_items[:3])
-check("current_idx = 0 (top-ranked item highlighted)", e._popup._current_idx == 0, e._popup._current_idx)
+# The Latin token is always the first row (Saad, 2026-10-09); the
+# highlight starts on the engine's top Arabic choice, one row below.
+check("Latin token is the first row", popup_items[:1] == ["salam"], popup_items[:3])
+check("row 1 is Arabic", len(popup_items) > 1 and any('؀' <= c <= 'ۿ' for c in popup_items[1]), popup_items[:3])
+check("current_idx = 1 (top Arabic highlighted)", e._popup._current_idx == 1, e._popup._current_idx)
 highlighted = e._popup.current_text()
 check("highlighted item is Arabic", highlighted and any('؀' <= c <= 'ۿ' for c in highlighted), highlighted)
 e.close()
@@ -460,15 +460,15 @@ QTest.keyClick(e, Qt.Key_Down)
 QTest.keyClick(e, Qt.Key_Down)
 app.processEvents()
 pinned = e._popup.current_text()
-check("scrolled highlight is not the default", pinned and e._popup._current_idx != 0, pinned)
+check("scrolled highlight is not the default", pinned and e._popup._current_idx != 1, pinned)
 type_text(e, "am")
 QTest.qWait(50)
 app.processEvents()
 new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
 matching = [c for c in new_items if c.startswith(pinned)]
 if matching:
-    check("candidates starting with pinned suggestion come first",
-          new_items[: len(matching)] == matching, new_items[:4])
+    check("candidates starting with pinned suggestion come first (after Latin)",
+          new_items[1: 1 + len(matching)] == matching, new_items[:4])
     check("highlight sits on a pinned candidate",
           (e._popup.current_text() or "").startswith(pinned), e._popup.current_text())
 else:
@@ -491,10 +491,10 @@ items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
 # وقفة (ta marbuta) is expected as a non-default candidate here — must
 # actually scroll (index > 0) or the no-scroll-doesn't-pin rule (Test 19)
 # means nothing gets pinned and the test would pass without exercising it.
-target_idx = next((i for i, t in enumerate(items) if t == "وقفة" and i > 0), None)
+target_idx = next((i for i, t in enumerate(items) if t == "وقفة" and i > 1), None)
 check("found a scrollable وقفة candidate", target_idx is not None, items[:6])
 if target_idx is not None:
-    for _ in range(target_idx):
+    for _ in range(target_idx - 1):  # highlight starts on row 1
         QTest.keyClick(e, Qt.Key_Down)
     app.processEvents()
     pinned = e._popup.current_text()
@@ -504,7 +504,7 @@ if target_idx is not None:
     app.processEvents()
     new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
     check("respelled candidates still promoted to the top",
-          new_items and new_items[0].startswith("وقفت"), new_items[:4])
+          len(new_items) > 1 and new_items[1].startswith("وقفت"), new_items[:4])
 e.close()
 
 
@@ -515,10 +515,10 @@ type_text(e, "da")
 QTest.qWait(50)
 app.processEvents()
 items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
-target_idx = next((i for i, t in enumerate(items) if t == "دى" and i > 0), None)
+target_idx = next((i for i, t in enumerate(items) if t == "دى" and i > 1), None)
 check("found a scrollable 'دى' candidate", target_idx is not None, items[:6])
 if target_idx is not None:
-    for _ in range(target_idx):
+    for _ in range(target_idx - 1):  # highlight starts on row 1
         QTest.keyClick(e, Qt.Key_Down)
     app.processEvents()
     pinned = e._popup.current_text()
@@ -528,7 +528,7 @@ if target_idx is not None:
     app.processEvents()
     new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
     check("absorbed-vowel candidate (دار) promoted to top",
-          new_items and new_items[0] == "دار", new_items[:4])
+          len(new_items) > 1 and new_items[1] == "دار", new_items[:4])
 e.close()
 
 
@@ -592,7 +592,7 @@ QTest.keyClick(e, Qt.Key_Down)
 QTest.keyClick(e, Qt.Key_Down)
 app.processEvents()
 scrolled_to = e._popup.current_text()
-check("scrolled off the default before leaving", e._popup._current_idx != 0, scrolled_to)
+check("scrolled off the default before leaving", e._popup._current_idx != 1, scrolled_to)
 # Simulate Cmd+Tab away: focus-out for window deactivation + app inactive
 app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.ActiveWindowFocusReason))
 e._on_app_state_changed(Qt.ApplicationInactive)
@@ -616,7 +616,7 @@ check("token includes letters typed before leaving",
 check("popup still up with full-word suggestions", e._popup.isVisible())
 new_items = [e._popup._list.item(i).text() for i in range(e._popup._list.count())]
 check("restored highlight also pins when typing continues",
-      new_items and new_items[0].startswith(scrolled_to), new_items[:4])
+      len(new_items) > 1 and new_items[1].startswith(scrolled_to), new_items[:4])
 e.close()
 
 
@@ -818,7 +818,12 @@ e.set_arabizi_enabled(False)
 type_text(e, "hello world")
 QTest.keyClick(e, Qt.Key_Backspace, Qt.AltModifier)
 app.processEvents()
-check("Option+Backspace removes 'world'", e.toPlainText() == "hello ", e.toPlainText())
+if app.platformName() == "offscreen":
+    # The offscreen test platform has no macOS key bindings, so Qt's own
+    # delete-word never runs there; only checkable on the real display.
+    print("  - Option+Backspace: skipped (needs the real display)")
+else:
+    check("Option+Backspace removes 'world'", e.toPlainText() == "hello ", e.toPlainText())
 e.close()
 
 
@@ -970,6 +975,11 @@ e = make_editor()
 type_text(e, "salam")
 QTest.keyClick(e, Qt.Key_A, Qt.ControlModifier); app.processEvents()
 check("a shortcut (Cmd+A) keeps the word Latin", e.toPlainText() == "salam", e.toPlainText())
+e.close()
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Left, Qt.AltModifier); app.processEvents()
+check("Option+Left converts like a plain arrow", e.toPlainText() == "سلام", e.toPlainText())
 e.close()
 e = make_editor(); db = make_db(); e.set_learned_db(db)
 type_text(e, "salam ")

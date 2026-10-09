@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
         name = self._current_file.name if self._current_file else "Untitled"
         self.setWindowTitle(name)
         try:
-            ns_window = native_dialogs.frontmost_ns_window()
+            ns_window = native_dialogs.ns_window_of(self)
             if ns_window:
                 ns_window.setRepresentedFilename_(
                     str(self._current_file) if self._current_file else ""
@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
     def _set_document_edited(self, edited: bool) -> None:
         """Native unsaved-changes indicator — the dot in the close button."""
         try:
-            ns_window = native_dialogs.frontmost_ns_window()
+            ns_window = native_dialogs.ns_window_of(self)
             if ns_window:
                 ns_window.setDocumentEdited_(edited)
         except Exception:
@@ -192,9 +192,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from AppKit import NSApp, NSColor, NSAppearance  # type: ignore
+            from AppKit import NSColor, NSAppearance  # type: ignore
 
-            ns_window = NSApp.mainWindow() or (NSApp.windows()[0] if NSApp.windows() else None)
+            ns_window = native_dialogs.ns_window_of(self)
             if not ns_window:
                 return
 
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
 
     def _warn(self, message: str, informative: str = "") -> None:
         self._active_sheet = native_dialogs.show_sheet(
-            native_dialogs.frontmost_ns_window(), message, informative, ["OK"],
+            native_dialogs.ns_window_of(self), message, informative, ["OK"],
             on_response=lambda _: setattr(self, "_active_sheet", None),
         )
 
@@ -382,8 +382,7 @@ class MainWindow(QMainWindow):
     def bring_back(self) -> None:
         """Show the window again after it was closed (Dock click, Cmd+N)."""
         if not self.isVisible():
-            self.show()
-            self._setup_title_bar()
+            self.show()  # native window (and its title-bar styling) survives hide
             self._update_window_title()
         self.raise_()
         self.activateWindow()
@@ -463,7 +462,7 @@ class MainWindow(QMainWindow):
         # "Cancel" added first -> rightmost + default (Return-bound); Cocoa
         # also auto-binds Escape to it regardless of position.
         self._active_sheet = native_dialogs.show_sheet(
-            native_dialogs.frontmost_ns_window(),
+            native_dialogs.ns_window_of(self),
             "You have unsaved changes.", "Discard them?",
             ["Cancel", "Discard"], handle,
         )
@@ -503,7 +502,7 @@ class MainWindow(QMainWindow):
 
         # "Yes" added first -> rightmost + default (Return-bound).
         self._active_sheet = native_dialogs.show_sheet(
-            native_dialogs.frontmost_ns_window(),
+            native_dialogs.ns_window_of(self),
             "Unsaved text from a previous session was found.", "Restore it?",
             ["Yes", "No"], handle, style="informational",
         )
@@ -536,6 +535,8 @@ class MainWindow(QMainWindow):
                 if not self._is_dirty:  # save succeeded
                     self._cleanup_recovery()
                     self.close()
+                else:  # Save As cancelled: stay open, and drop the quit
+                    self._quitting = False
             elif button == "Discard":
                 self._is_dirty = False
                 self._set_document_edited(False)
@@ -548,7 +549,7 @@ class MainWindow(QMainWindow):
         # Added in Save, Cancel, Discard order -> Cocoa lays them out
         # right-to-left as Discard, Cancel, Save (Save rightmost + default).
         self._active_sheet = native_dialogs.show_sheet(
-            native_dialogs.frontmost_ns_window(),
+            native_dialogs.ns_window_of(self),
             f"Do you want to save the changes you made to “{name}”?",
             "Your changes will be lost if you don't save them.",
             ["Save", "Cancel", "Discard"], handle,

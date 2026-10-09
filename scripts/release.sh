@@ -11,12 +11,25 @@ if [ -n "$(git status --porcelain)" ]; then
     echo "commit your changes first"; exit 1
 fi
 
-# Tests first. The keystroke-simulating suites can drop a key now and
-# then (see CLAUDE.md), so each gets one retry.
+# Same version as a published release, but new commits: the version
+# wasn't bumped. (Same commit = a rerun after a failed tap push: fine.)
+if gh release view "v$VERSION" >/dev/null 2>&1; then
+    TAGGED=$(git rev-list -n 1 "v$VERSION" 2>/dev/null || gh api "repos/sawtdakhili/oktoboot/commits/v$VERSION" -q .sha)
+    if [ "$TAGGED" != "$(git rev-parse HEAD)" ]; then
+        echo "v$VERSION is already released — bump __version__ in src/oktoboot/__init__.py first"
+        exit 1
+    fi
+fi
+
+# Tests first, in hidden windows (QT_QPA_PLATFORM=offscreen) so typing on
+# the Mac meanwhile can't land in them. One retry each for the rare
+# dropped simulated keystroke; a real failure is shown, then we stop.
 for t in engine comprehensive extended darija_words editor; do
-    PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >/dev/null 2>&1 ||
-    PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >/dev/null 2>&1 ||
-    { echo "tests/test_$t.py fails — not releasing"; exit 1; }
+    LOG=$(mktemp)
+    QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >"$LOG" 2>&1 ||
+    QT_QPA_PLATFORM=offscreen PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >"$LOG" 2>&1 ||
+    { grep -E "✗|FAIL|Error" "$LOG"; echo "tests/test_$t.py fails — not releasing"; exit 1; }
+    rm -f "$LOG"
 done
 
 scripts/build_app.sh

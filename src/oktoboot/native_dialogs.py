@@ -14,9 +14,22 @@ from __future__ import annotations
 from typing import Callable, Sequence
 
 
-def frontmost_ns_window():
-    from AppKit import NSApp
-    return NSApp.mainWindow() or (NSApp.windows()[0] if NSApp.windows() else None)
+def ns_window_of(widget):
+    """The NSWindow behind a Qt top-level widget, or None off macOS.
+
+    Taken from the widget itself, not from "the app's main window": that
+    is nil while another app is in front (Dock > Quit, logout), and the
+    first window in the list can be the hidden suggestion popup — a sheet
+    attached there is invisible and the quit looks stuck."""
+    from PySide6.QtGui import QGuiApplication
+    if QGuiApplication.platformName() != "cocoa":
+        return None
+    try:
+        import objc
+        view = objc.objc_object(c_void_p=int(widget.winId()))
+        return view.window()
+    except Exception:
+        return None
 
 
 def show_sheet(

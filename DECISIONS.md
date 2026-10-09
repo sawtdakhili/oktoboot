@@ -129,3 +129,17 @@ Letter check against DODa (7,325 one-word Moroccan pairs; "North Africa + Arabiz
 - Mac convention: closing the last window closes the document (with the usual save prompt) and hides the window; the app keeps running. A Dock click or Cmd+N brings it back blank. Cmd+Q quits (unsaved text → the same prompt, then quit; Cancel stays).
 - How: `setQuitOnLastWindowClosed(False)`; a parentless `QMenuBar` on macOS so the menus work with no window; `_QuitWatcher` notes the Quit event (so a close that waited on the save sheet goes on to quit) and shows the window again on Qt's "application active" signal, which Qt also sends for a Dock click when the app is already active.
 - Tested with simulated sheets (Discard / Cancel / quit). Not tested by a human: the real Dock click and Cmd+Q.
+
+## 2026-10-09 — Latin word always the first row (Saad)
+
+- The suggestion list always starts with the Latin word (grey, italic); the highlight starts on the top Arabic one, so Space still converts. Up once → Latin (preview shows it; Space keeps it and teaches "keep Latin", same as Shift+Space). Saad chose this over "Latin highlighted by default" (that would make Space keep Latin on every word).
+- If the user taught a word to stay Latin, the highlight starts on the Latin row.
+
+## 2026-10-09 — /yousure on 0.1.2: applied (Saad: "you're call?" → all five)
+
+- Option/Cmd + arrow, Home, End, PageUp/Down mid-word convert like plain arrows (they only move the caret — Saad's Karabiner Caps layer sends them). Every other shortcut still keeps the Latin. Physical Ctrl+letters (Qt's Meta) were left as they were: on macOS they're mostly caret moves (Ctrl+A/E).
+- Save sheets attach to the main window found from the widget itself (`native_dialogs.ns_window_of`), not "the app's main window" — that's nil when another app is in front (Dock > Quit) and could pick the hidden popup.
+- A Cmd+Q whose Save As is cancelled no longer leaves the app set to quit on the next close.
+- `release.sh`: stops if the version wasn't bumped (release exists on another commit); tests run hidden (offscreen) and failures are shown. The Option+Backspace check skips itself offscreen (that platform has no macOS key bindings).
+- `python@3.14` marked installed-on-request so Homebrew keeps the venv's interpreter (noted in CLAUDE.md).
+- Not human-tested yet: Dock click, Cmd+Q, Dock > Quit with another app in front.

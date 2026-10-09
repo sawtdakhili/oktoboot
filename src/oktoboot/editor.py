@@ -208,11 +208,18 @@ class SuggestionPopup(QFrame):
 
     def populate(self, latin_token: str, candidates: list[str]) -> None:
         """`candidates` is the full ranked list (from engine.suggest()) —
-        already includes the Latin token wherever it ranks. Index 0 is
-        always the intended default highlight."""
-        self._items = candidates
+        already includes the Latin token wherever it ranks; its index 0 is
+        the intended default highlight.
+
+        The Latin token is always shown as the first row (Saad,
+        2026-10-09), one Up away. The highlight still starts on the
+        engine's first choice — Arabic, unless the user taught it to keep
+        this word Latin."""
+        rest = [c for c in candidates if c != latin_token]
+        self._items = [latin_token] + rest
         self._latin_token = latin_token
-        self._current_idx = 0
+        keep_latin = bool(candidates) and candidates[0] == latin_token
+        self._current_idx = 0 if keep_latin or not rest else 1
         self._user_navigated = False
         self._rebuild()
 
@@ -536,6 +543,11 @@ class ArabicEditor(QTextEdit):
     # ------------------------------------------------------------------
     # Key handling
 
+    NAV_KEYS = {
+        Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down,
+        Qt.Key_Home, Qt.Key_End, Qt.Key_PageUp, Qt.Key_PageDown,
+    }
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
         mods = event.modifiers()
@@ -650,6 +662,12 @@ class ArabicEditor(QTextEdit):
         # If Cmd or Ctrl is held (shortcuts like Cmd+A, Cmd+V, Cmd+C, Cmd+Z),
         # commit composing word and let Qt handle the shortcut — never compose
         if mods & (Qt.ControlModifier | Qt.AltModifier):
+            if key in self.NAV_KEYS:
+                # Option/Cmd + arrow, Home, End… only moves the caret:
+                # that's leaving the word, same as a plain arrow.
+                self._finish_word()
+                super().keyPressEvent(event)
+                return
             # A shortcut never converts the word (Saad, 2026-10-09): it
             # stays Latin, as typed. (Converting first also broke Cmd+Z,
             # which then reverted the conversion instead.)
