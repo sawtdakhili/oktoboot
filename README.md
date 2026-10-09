@@ -1,4 +1,4 @@
-# oktoboot — اكتب
+# oktoboot — أكتبوت
 
 **Offline Arabic text editor with Moroccan Arabizi/Franco-Arab transliteration.**
 
