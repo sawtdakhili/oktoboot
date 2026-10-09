@@ -11,16 +11,33 @@ if [ -n "$(git status --porcelain)" ]; then
     echo "commit your changes first"; exit 1
 fi
 
+# Tests first. The keystroke-simulating suites can drop a key now and
+# then (see CLAUDE.md), so each gets one retry.
+for t in engine comprehensive extended darija_words editor; do
+    PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >/dev/null 2>&1 ||
+    PYTHONPATH=src .venv/bin/python "tests/test_$t.py" >/dev/null 2>&1 ||
+    { echo "tests/test_$t.py fails — not releasing"; exit 1; }
+done
+
 scripts/build_app.sh
 SHA=$(shasum -a 256 "$ZIP" | cut -d' ' -f1)
 
-gh release create "v$VERSION" "$ZIP" --title "oktoboot $VERSION" --generate-notes
+# Already published (a rerun after a failed tap push): don't publish again.
+if gh release view "v$VERSION" >/dev/null 2>&1; then
+    echo "release v$VERSION exists — updating the tap only"
+    SHA=$(gh release download "v$VERSION" --pattern "*.zip" --output - | shasum -a 256 | cut -d' ' -f1)
+else
+    gh release create "v$VERSION" "$ZIP" --title "oktoboot $VERSION" --generate-notes
+fi
 
 TAP=$(mktemp -d)
 gh repo clone sawtdakhili/homebrew-tap "$TAP" -- --quiet
 sed -i '' -e "s/^  version \".*\"/  version \"$VERSION\"/" \
           -e "s/^  sha256 \".*\"/  sha256 \"$SHA\"/" "$TAP/Casks/oktoboot.rb"
-git -C "$TAP" commit -am "oktoboot $VERSION"
-git -C "$TAP" push
+if git -C "$TAP" commit -qam "oktoboot $VERSION"; then
+    git -C "$TAP" push
+else
+    echo "tap already on $VERSION"
+fi
 rm -rf "$TAP"
 echo "released $VERSION — brew upgrade picks it up"

@@ -650,7 +650,13 @@ class ArabicEditor(QTextEdit):
         # If Cmd or Ctrl is held (shortcuts like Cmd+A, Cmd+V, Cmd+C, Cmd+Z),
         # commit composing word and let Qt handle the shortcut — never compose
         if mods & (Qt.ControlModifier | Qt.AltModifier):
-            self._finish_word()
+            # A shortcut never converts the word (Saad, 2026-10-09): it
+            # stays Latin, as typed. (Converting first also broke Cmd+Z,
+            # which then reverted the conversion instead.)
+            if self._reedit_entry is not None:
+                self._reset_compose_state()
+            else:
+                self._commit_latin()
             super().keyPressEvent(event)
             return
 
@@ -935,7 +941,8 @@ class ArabicEditor(QTextEdit):
 
     def _finish_word(self) -> None:
         """
-        The user moved on from the word (arrow, click elsewhere, a shortcut):
+        The user moved on from the word (arrow, click elsewhere, focus moving
+        inside the app; never a shortcut — those keep the Latin):
         keep the highlighted suggestion, as Space would. Popup closed with
         Escape (or a URL) → the Latin stays. An untouched re-edit is left
         as it was.
@@ -947,7 +954,9 @@ class ArabicEditor(QTextEdit):
             return
         choice = self._popup.current_text() if self._popup.isVisible() else None
         if choice and not _looks_like_url(self._compose_token):
-            self._accept_suggestion(choice)
+            # Not learned: walking away from a word isn't choosing it.
+            # Only Space / Enter / Tab / a click teach the ranking.
+            self._accept_suggestion(choice, learn=False)
         else:
             self._commit_latin()
 

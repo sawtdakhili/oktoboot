@@ -107,3 +107,19 @@ Yamli study (its own API, 157 words: oktoboot 85% first-right, Yamli 74%; was 82
 - A word never starts with ي/و for a vowel: initial i/e/o/u → إ/ا/أ (inchallah → إنشالله, ekhtar → اختار). `allah` → الله as one piece.
 - `_NAMES`: ~65 common Moroccan names with their Latin spellings, only ones the rules got wrong. Names win over same-spelled words (walid → وليد before والد).
 Kept different from Yamli on purpose: Moroccan alif spellings, ڭ, full list visible, Enter accepts, Tab inserts a tab, mode shown by cursor colour. Not taken: "show more" short list, report-a-word, hyphenated words.
+
+## 2026-10-09 — /yousure on the 0.1.1 build, and a letter check
+
+Applied (Saad: "okay for all fixes"):
+- Leaving a word converts it but **doesn't teach the ranking** (`_finish_word` → `learn=False`). Otherwise every arrow/click-away saved the top suggestion as Saad's choice, and learned choices outrank everything.
+- **Cmd+Z / Shift+Cmd+Z mid-word** keep the Latin (no conversion first). Converting first made the undo revert the conversion and left a wrong learned choice.
+- `scripts/release.sh` runs the 5 test suites first (one retry each, for the keystroke flakes) and can be rerun after a failed tap push (skips an existing release, takes the published zip's sha).
+- Open: Saad's report "delete the space → suggestions should reappear and keep changing" — not reproduced in simulation (bare editor or full window, keyboard or mouse pick). Only the mouse-click bug was found and fixed. Needs his exact key sequence if it recurs.
+- Open: a human check of 0.1.1 (Open Anyway + typing) — DECISIONS 2026-10-09 packaging still says not done.
+- Saad: **no shortcut converts a word** (Cmd/Ctrl/Option + key mid-word → the Latin stays). Finish-on-leave is now arrows, clicks and in-app focus loss only.
+
+Letter check against DODa (7,325 one-word Moroccan pairs; "North Africa + Arabizi first", Saad):
+- `z` = ز. ذ/ظ kept but cost +3 (`_RARE_LETTER_COST`); ذنب no longer shows right under زينب.
+- `x` = ش first (Maghreb texting: wax → واش, kifax → كيفاش), then كس for loanwords; an x-word with no entry is looked up with ch (xhal → شحال). `taxi` override.
+- Hamza `2` takes its seat from the vowels around it (ra2is → رئيس, su2al → سؤال, sma2 → سماء, 2ila → إلى).
+- Measured but **not changed**: final ة vs ا (lowering ة's cost gained <1 point on non-dictionary words; dictionary words already right), emphatics ط/ض/ص (truly ambiguous; frequency decides), g → ڭ vs ق/ج (frequency decides; DODa uses ڭ by convention, typing practice varies).

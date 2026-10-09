@@ -88,7 +88,7 @@ MAPPING: dict[str, list[str]] = {
     "t":  ["ت", "ط"],
     "v":  ["ڤ", "ف"],
     "w":  ["و"],
-    "x":  ["ز", "كس"],
+    "x":  ["ش", "كس"],          # Maghreb texting: wax → واش, xhal → شحال
     "y":  ["ي"],
     "z":  ["ز", "ذ", "ظ"],   # ز primary, ذ/ظ lower-ranked alternatives
 
@@ -137,17 +137,26 @@ class _Key:
     letters: list[str]
     absorbed: str = ""        # vowel swallowed by a consonant+vowel key ("ka" → ك)
     vowel: bool = False       # key is itself a vowel ("a", "ou", ...)
+    base: str = ""            # the MAPPING key it comes from ("z" for "zz", "za")
 
 
 _KEYS: dict[str, _Key] = {
-    k: _Key(letters, vowel=k[0] in _VOWEL_LETTERS) for k, letters in MAPPING.items()
+    k: _Key(letters, vowel=k[0] in _VOWEL_LETTERS, base=k) for k, letters in MAPPING.items()
 }
 for _c in _DOUBLABLE:
-    _KEYS.setdefault(_c * 2, _Key([L + SHADDA for L in MAPPING[_c]]))
+    _KEYS.setdefault(_c * 2, _Key([L + SHADDA for L in MAPPING[_c]], base=_c))
 for _key, _info in list(_KEYS.items()):
     if not _info.vowel:
         for _v in _VOWELS:
-            _KEYS.setdefault(_key + _v, _Key(_info.letters, absorbed=_v))
+            _KEYS.setdefault(_key + _v, _Key(_info.letters, absorbed=_v, base=_info.base))
+
+# Letters a key almost never means in North African Arabizi: kept in the
+# list, but well below the usual ones. z is ز; ذ/ظ are written d or dh
+# (Saad, 2026-10-09: ذنب was showing right under زينب).
+_RARE_LETTER_COST: dict[tuple[str, str], float] = {
+    ("z", "ذ"): 3.0,
+    ("z", "ظ"): 3.0,
+}
 
 _SORTED_KEYS = sorted(_KEYS, key=lambda k: (-len(k), k))
 
@@ -270,6 +279,7 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "chokran":  ["شكراً", "شكرا", "شكران"],
     # Darija adjective; the corpus's MSA نادماً would otherwise win (tanwin rule)
     "nadman":   ["ندمان"],
+    "taxi":     ["طاكسي", "تاكسي"],   # x = ش would give تشي
     # DODa lists امن first; typed with a leading "aa" it's almost always amen
     "aamin":    ["آمين", "آمن"],
     # Typed with its hamza, the phrase is meant in full
@@ -363,6 +373,12 @@ def _doda_lookup(token: str) -> list[str]:
     Checks built-in overrides first, then DODa database."""
     key = token.lower()
     overrides = _DARIJA_OVERRIDES.get(key, [])
+    if not overrides and "x" in key:
+        # x is texting shorthand for ch (xhal = chhal): same entries.
+        alias = key.replace("x", "ch")
+        if alias in _DARIJA_OVERRIDES or _doda().execute(
+                "SELECT 1 FROM darija WHERE arabizi = ? LIMIT 1", (alias,)).fetchone():
+            return _doda_lookup(alias)
 
     rows = _doda().execute(
         "SELECT arabic FROM darija WHERE arabizi = ? ORDER BY rowid",
@@ -435,6 +451,29 @@ _INITIAL_LETTERS: dict[str, list[str]] = {
 _COST_WEIGHT = 0.8
 
 
+def _hamza_letters(t: str, pos: int, end: int, info: _Key) -> list[str]:
+    """
+    A typed "2" (hamza), its seat chosen from the vowels around it, as
+    written Arabic does: next to i → ئ (ra2is → رئيس), next to o/u → ؤ
+    (su2al → سؤال, mo2min → مؤمن), at the start → أ/إ, at the end after
+    a consonant or ā → ء (sma2 → سماء), otherwise أ. The other seats
+    follow in their usual order.
+    """
+    prev = t[pos - 1] if pos > 0 else ""
+    nxt = info.absorbed or (t[end] if end < len(t) else "")
+    if pos == 0:
+        seat = "إ" if nxt in ("i", "e") else "أ"
+    elif not nxt:
+        seat = "ئ" if prev == "i" else "ؤ" if prev in ("o", "u") else "ء"
+    elif "i" in (prev, nxt):
+        seat = "ئ"
+    elif prev in ("o", "u") or nxt in ("o", "u"):
+        seat = "ؤ"
+    else:
+        seat = "أ"
+    return [seat] + [L for L in MAPPING["2"] if L != seat]
+
+
 def _generate_candidates(token: str) -> dict[str, float]:
     """
     All spellings of `token` the key table allows, each with its cost.
@@ -474,7 +513,10 @@ def _generate_candidates(token: str) -> dict[str, float]:
             if info.vowel:
                 base += _WRITE_COST[key[0]]
             letters = _INITIAL_LETTERS.get(key, info.letters) if pos == 0 else info.letters
-            options = [(letter, i * _ALT_COST) for i, letter in enumerate(letters)]
+            if info.base == "2":
+                letters = _hamza_letters(t, pos, end, info)
+            options = [(letter, i * _ALT_COST + _RARE_LETTER_COST.get((info.base, letter.rstrip(SHADDA)), 0.0))
+                       for i, letter in enumerate(letters)]
             if final:
                 options += [(letter, _FINAL_EXTRA_COST) for letter in _FINAL_EXTRA.get(key, [])]
             for letter, step in options:

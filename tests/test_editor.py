@@ -945,6 +945,39 @@ e.close()
 
 
 # ---------------------------------------------------------------------------
+print("\n=== Test 32: Leaving a word teaches nothing; Cmd+Z keeps the Latin ===")
+import sqlite3
+def learned_rows(db):
+    return db.execute("SELECT input, chosen FROM choices").fetchall()
+def make_db():
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE choices (input TEXT NOT NULL, chosen TEXT NOT NULL,"
+               " count INTEGER DEFAULT 1, last_used INTEGER, PRIMARY KEY (input, chosen))")
+    return db
+e = make_editor(); db = make_db(); e.set_learned_db(db)
+type_text(e, "kifach")
+QTest.keyClick(e, Qt.Key_Home); app.processEvents()
+check("Home converted the word", e.toPlainText() == "كيفاش", e.toPlainText())
+check("…but nothing was learned", learned_rows(db) == [], learned_rows(db))
+QTest.keyClick(e, Qt.Key_End); app.processEvents()
+type_text(e, " salam")
+QTest.keyClick(e, Qt.Key_Z, Qt.ControlModifier); app.processEvents()
+check("Cmd+Z mid-word: no Arabic for it", "سلام" not in e.toPlainText(), e.toPlainText())
+check("Cmd+Z mid-word: nothing learned", learned_rows(db) == [], learned_rows(db))
+check("Cmd+Z mid-word: not composing", not e._composing)
+e.close()
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_A, Qt.ControlModifier); app.processEvents()
+check("a shortcut (Cmd+A) keeps the word Latin", e.toPlainText() == "salam", e.toPlainText())
+e.close()
+e = make_editor(); db = make_db(); e.set_learned_db(db)
+type_text(e, "salam ")
+check("Space still teaches", learned_rows(db) == [("salam", "سلام")], learned_rows(db))
+e.close()
+
+
+# ---------------------------------------------------------------------------
 print(f"\n{'='*40}")
 print(f"{PASS} passed, {FAIL} failed")
 if FAIL:
