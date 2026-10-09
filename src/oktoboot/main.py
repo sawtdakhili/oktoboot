@@ -521,7 +521,26 @@ class MainWindow(QMainWindow):
 
 # ---------------------------------------------------------------------------
 
+def _selftest() -> None:
+    """`oktoboot --selftest`: check the bundled data loads and the engine
+    answers, without opening a window. Exit code 1 on failure."""
+    from oktoboot import engine
+    checks = {"salam": "سلام", "kifach": "كيفاش", "chokran": "شكراً"}
+    ok = True
+    for latin, expected in checks.items():
+        got = engine.suggest(latin)[:3]
+        ok &= bool(got) and got[0] == expected
+        print(f"{latin} -> {' '.join(got)}")
+    fonts = sorted(p.name for p in FONT_DIR.glob("*.ttf"))
+    ok &= bool(fonts)
+    print(f"data: {DATA_DIR}\nfonts: {', '.join(fonts) or 'MISSING'}")
+    print("selftest OK" if ok else "selftest FAILED")
+    sys.exit(0 if ok else 1)
+
+
 def main() -> None:
+    if "--selftest" in sys.argv:
+        _selftest()
     app = QApplication(sys.argv)
     app.setApplicationName("oktoboot")
     app.setStyleSheet(STYLE)

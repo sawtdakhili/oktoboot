@@ -33,3 +33,35 @@ distributed under its own license as noted below.
    Authors: Khaled Hosny and contributors
 
    Bundled as data/fonts/Amiri-Regular.ttf (and variants).
+
+-------------------------------------------------------------------------------
+4. Qt for Python (PySide6) and the Qt libraries
+   Source:  https://www.qt.io/qt-for-python  —  https://code.qt.io
+   License: GNU Lesser General Public License v3 (LGPL-3.0)
+            https://www.gnu.org/licenses/lgpl-3.0.html
+   Authors: The Qt Company Ltd. and contributors
+
+   Bundled inside oktoboot.app (Contents/Frameworks/PySide6) as separate,
+   unmodified, dynamically linked libraries. You may replace them with
+   your own build of the same Qt/PySide6 version. The full source of this
+   app is at https://github.com/sawtdakhili/oktoboot, so the app can be
+   rebuilt against any compatible Qt.
+
+-------------------------------------------------------------------------------
+5. Python
+   Source:  https://www.python.org
+   License: Python Software Foundation License
+            https://docs.python.org/3/license.html
+   Authors: Python Software Foundation and contributors
+
+   The Python interpreter and standard library are bundled inside
+   oktoboot.app (Contents/Frameworks/Python.framework).
+
+-------------------------------------------------------------------------------
+6. PyObjC
+   Source:  https://github.com/ronaldoussoren/pyobjc
+   License: MIT License
+   Authors: Ronald Oussoren and contributors
+
+   Bundled inside oktoboot.app; used for the native macOS dialogs and
+   title bar.

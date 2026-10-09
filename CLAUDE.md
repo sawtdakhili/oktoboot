@@ -6,6 +6,10 @@ Offline Arabic Arabizi/Franco-Arab text editor. See memory for full context.
 
 **Test all:** `PYTHONPATH=src .venv/bin/python tests/test_engine.py && PYTHONPATH=src .venv/bin/python tests/test_editor.py && PYTHONPATH=src .venv/bin/python tests/test_comprehensive.py && PYTHONPATH=src .venv/bin/python tests/test_extended.py && PYTHONPATH=src .venv/bin/python tests/test_darija_words.py`
 
+**Build the app:** `scripts/build_app.sh` → `dist/oktoboot.app` + release zip (Apple Silicon, macOS 15+; needs `pip install pyinstaller` in `.venv` and the data built). `oktoboot --selftest` checks a build without opening a window.
+
+**Release a new version:** bump `__version__` in `src/oktoboot/__init__.py`, commit, push, then `scripts/release.sh` — builds, publishes the GitHub release, and bumps the cask in `sawtdakhili/homebrew-tap`. Ask Saad before running it (it publishes).
+
 **Rebuild data:** `python3 scripts/build_frequencies.py && python3 scripts/build_doda.py`
 
 **Rebuild icon:** `python3 scripts/build_icon.py` — renders `data/icon.svg` once at high res, strips the SVG's opaque white canvas (flood-fill the corners → transparent; a large threshold is needed or the anti-aliased white→dark gradient survives as a pale halo on the rounded corners), boosts contrast, scales the tile down to ~80.5% of the canvas with transparent padding around it (matches how macOS's own icons sit in the Dock/Cmd+Tab switcher — without this the tile reads visibly oversized next to other apps), then downscales (LANCZOS) into `data/icon.iconset/*` and writes `data/icon.icns`. (Don't run raw `rsvg-convert`/`iconutil` on the SVG directly — that re-introduces the white corners, low contrast, and oversized tile. Also don't inset the tentacle/pen artwork *within* the tile — tried once, user rejected it, see memory.)
@@ -17,6 +21,6 @@ Plain Tab with no popup open inserts a literal tab character (Qt's default `QTex
 **Decisions:** `DECISIONS.md` — append-only; read it before changing engine ranking, saving, or data builds.
 
 **Next up (ship before tabs/harakat — decided 2026-10-08, see DECISIONS.md):**
-1. Package as `.app` (PyInstaller), unsigned
+1. Saad tests the packaged app (Open Anyway + typing)
 2. Release: zipped `.app` on GitHub Releases + cask in own tap `sawtdakhili/homebrew-tap`; README gets the "Open Anyway" steps (see DECISIONS.md)
 3. After shipping: tabs, harakat/tashkil mode, README screenshot, `moustafa`→مصطفى gap

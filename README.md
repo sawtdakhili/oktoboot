@@ -61,22 +61,42 @@ oktoboot is offline-first, Moroccan-first, and open source.
 | `gh` | غ |
 | `sh` | ش |
 
-## Setup
+## Install
+
+Requires a Mac with Apple Silicon (M1 or newer) and macOS 15 (Sequoia) or newer.
+
+**Download:** get `oktoboot-<version>-macos-arm64.zip` from [Releases](https://github.com/sawtdakhili/oktoboot/releases), unzip it, and drag `oktoboot.app` to Applications.
+
+**Homebrew:**
+```bash
+brew install --cask sawtdakhili/tap/oktoboot
+```
+
+**First launch:** oktoboot isn't signed with a paid Apple developer account, so macOS blocks it the first time (and usually again after an update).
+1. Open oktoboot. macOS says it can't verify the app. Click **Done**.
+2. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the oktoboot message.
+3. Confirm with your password or Touch ID. From then on it opens normally.
+
+(Right-click → Open no longer skips this step on macOS 15 and later.)
+
+## Run from source
 
 Requires Python 3.11+ and Homebrew.
 
 ```bash
-cd ~/Documents/oktoboot
+git clone https://github.com/sawtdakhili/oktoboot.git && cd oktoboot
 python3 -m venv .venv
 .venv/bin/pip install PySide6 pyobjc-framework-Cocoa
 python3 scripts/build_frequencies.py   # downloads word list + Amiri font
-python3 scripts/build_doda.py          # downloads Darija dictionary
+python3 scripts/build_doda.py          # downloads Darija dictionary (needs the gh CLI, logged in)
 ```
 
 **Run:**
 ```bash
 PYTHONPATH=src .venv/bin/python src/oktoboot/main.py
 ```
+
+**Build the app:** `.venv/bin/pip install pyinstaller`, then `scripts/build_app.sh` → `dist/oktoboot.app` and the release zip.
 
 ## Data sources
 
@@ -85,6 +105,8 @@ PYTHONPATH=src .venv/bin/python src/oktoboot/main.py
 | Moroccan Darija dictionary | [DODa](https://github.com/darija-open-dataset/dataset) | CC BY-NC 4.0 |
 | Arabic word frequencies | [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) (OpenSubtitles 2018) | CC BY-SA 3.0 |
 | Amiri font | [aliftype/amiri](https://github.com/aliftype/amiri) | SIL OFL 1.1 |
+| Qt / PySide6 (in the app) | [Qt for Python](https://www.qt.io/qt-for-python) | LGPL-3.0 |
+| Python (in the app) | [python.org](https://www.python.org) | PSF License |
 | App icon | Original work | © 2026 Sawt Dakhili |
 
 See [NOTICE](NOTICE) for full attribution.

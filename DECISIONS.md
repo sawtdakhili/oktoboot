@@ -75,3 +75,20 @@ Saad: `chokran` → شكراً, then شكرا, then شكران ("the an at the e
 - **General rule** (`_generative_lookup`): a word ending in `an` also gets the ـاً (tanwin) spelling and the plain ـا spelling, built from the word minus its `n`. They cost `_TANWIN_COST` = 2.0 (+0.5 for the plain one), and the word list stores the tanwin forms, so frequency decides: جداً, أيضاً, مثلاً come first, while names keep their ن (رمضان, سلمان, إنسان, سلطان, زمان).
 - `chokran` itself has an override in exactly Saad's order. `an` is not always tanwin: of 20 Darija `-an` words checked, only `nadman` came out wrong (نادماً first), so it has an override → ندمان. Unrelated misses seen in the same check: `lmizan` → لماذا, `3yan` → عين. Benchmark after: 88% first, 98% top 3.
 - The word list `tests/test_darija_words.py` was accepted by Saad as the benchmark.
+
+## 2026-10-09 — Packaging: PyInstaller, Apple Silicon, macOS 15+
+
+- **PyInstaller** (most used, actively maintained, good Qt support) over py2app or Briefcase. The recipe is `oktoboot.spec`; `scripts/build_app.sh` builds the app, runs `--selftest` inside it, and makes `dist/oktoboot-<version>-macos-arm64.zip`.
+- **Apple Silicon only** (Saad). **macOS 15+:** the Homebrew Python and the PySide6 wheels inside are built for 15.0, so the app can't honestly claim older. Lowering it would need a python.org Python and older PySide6 wheels; not worth it now.
+- Bundle ID `com.oktoboot.oktoboot`, version 0.1.0, ad-hoc signed (no paid Apple account), so users click "Open Anyway" once (README).
+- Unused Qt parts are filtered out (virtual-keyboard and PDF plugins, and the QML/Quick/PDF/Network frameworks they pull in): app 148 → 128 MB, zip 47 MB.
+- `oktoboot --selftest` checks the bundled data loads and the engine answers, without a window.
+- Checked: valid signature; first launch with an empty home folder works; a quarantined (downloaded) copy is rejected by Gatekeeper as expected. **Not yet checked by a human:** the real "Open Anyway" click-through, and typing in the packaged app.
+- NOTICE now also credits Qt/PySide6 (LGPL-3.0), Python (PSF) and PyObjC (MIT), which are all inside the app.
+
+## 2026-10-09 — Release v0.1.0 + own Homebrew tap
+
+- Saad uses brew first, so the cask lives in his own public tap `sawtdakhili/homebrew-tap` (no Homebrew review, updates land as soon as they're pushed). Install: `brew install --cask sawtdakhili/tap/oktoboot`.
+- `scripts/release.sh` does a whole update: build, GitHub release, bump `version`/`sha256` in the cask.
+- Ad-hoc signing changes with every build, so macOS likely asks for "Open Anyway" again after each update. Only a paid Apple developer account ($99/yr) avoids it; not now.
+- The cask's `zap` removes `~/Library/Application Support/oktoboot` (learned words + recovery file) only on `brew uninstall --zap`.
