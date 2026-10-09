@@ -622,6 +622,18 @@ class ArabicEditor(QTextEdit):
                     self._reset_compose_state()
                 elif self._composing:
                     self._commit_latin()
+                if mods & Qt.ControlModifier:
+                    # Qt has no Cmd+Backspace on macOS: do it like other
+                    # Mac apps — delete back to the line's start; at the
+                    # start already, join with the line above.
+                    cursor = self.textCursor()
+                    if not cursor.hasSelection():
+                        cursor.movePosition(QTextCursor.StartOfLine, QTextCursor.KeepAnchor)
+                        if not cursor.hasSelection():
+                            cursor.movePosition(QTextCursor.PreviousCharacter, QTextCursor.KeepAnchor)
+                    cursor.removeSelectedText()
+                    self.setTextCursor(cursor)
+                    return
                 super().keyPressEvent(event)
                 return
             self._handle_backspace()

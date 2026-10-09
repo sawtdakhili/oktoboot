@@ -826,6 +826,22 @@ else:
     check("Option+Backspace removes 'world'", e.toPlainText() == "hello ", e.toPlainText())
 e.close()
 
+print("\n=== Test 26b: Cmd+Backspace deletes back to the line start ===")
+e = make_editor()
+type_text(e, "salam ")
+QTest.keyClick(e, Qt.Key_Return)
+type_text(e, "kifach")
+QTest.keyClick(e, Qt.Key_Backspace, Qt.ControlModifier)
+app.processEvents()
+check("Cmd+Backspace empties the second line",
+      e.toPlainText().split("\n")[-1] == "", repr(e.toPlainText()))
+check("first line untouched", e.toPlainText().split("\n")[0] != "", repr(e.toPlainText()))
+QTest.keyClick(e, Qt.Key_Backspace, Qt.ControlModifier)
+app.processEvents()
+check("Cmd+Backspace at line start joins with the line above",
+      "\n" not in e.toPlainText() and e.toPlainText() != "", repr(e.toPlainText()))
+e.close()
+
 
 # ---------------------------------------------------------------------------
 print("\n=== Test 27: Paste is plain RTL text ===")
