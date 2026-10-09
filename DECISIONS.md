@@ -123,3 +123,9 @@ Letter check against DODa (7,325 one-word Moroccan pairs; "North Africa + Arabiz
 - `x` = ش first (Maghreb texting: wax → واش, kifax → كيفاش), then كس for loanwords; an x-word with no entry is looked up with ch (xhal → شحال). `taxi` override.
 - Hamza `2` takes its seat from the vowels around it (ra2is → رئيس, su2al → سؤال, sma2 → سماء, 2ila → إلى).
 - Measured but **not changed**: final ة vs ا (lowering ة's cost gained <1 point on non-dictionary words; dictionary words already right), emphatics ط/ض/ص (truly ambiguous; frequency decides), g → ڭ vs ق/ج (frequency decides; DODa uses ڭ by convention, typing practice varies).
+
+## 2026-10-09 — Closing the window doesn't quit (Saad)
+
+- Mac convention: closing the last window closes the document (with the usual save prompt) and hides the window; the app keeps running. A Dock click or Cmd+N brings it back blank. Cmd+Q quits (unsaved text → the same prompt, then quit; Cancel stays).
+- How: `setQuitOnLastWindowClosed(False)`; a parentless `QMenuBar` on macOS so the menus work with no window; `_QuitWatcher` notes the Quit event (so a close that waited on the save sheet goes on to quit) and shows the window again on Qt's "application active" signal, which Qt also sends for a Dock click when the app is already active.
+- Tested with simulated sheets (Discard / Cancel / quit). Not tested by a human: the real Dock click and Cmd+Q.

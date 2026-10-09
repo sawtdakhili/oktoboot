@@ -7,11 +7,11 @@ import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction, QActionGroup, QFont, QFontDatabase, QIcon, QKeySequence,
 )
-from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow
+from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMenuBar
 
 from oktoboot import native_dialogs
 from oktoboot.editor import ArabicEditor
@@ -112,6 +112,9 @@ class MainWindow(QMainWindow):
         # Files whose pre-session version was already copied to .bak
         # (see _write).
         self._backed_up: set[Path] = set()
+        # Set when the user asked to quit (Cmd+Q), so a close that waited
+        # on the save sheet goes on to quit instead of only hiding.
+        self._quitting = False
 
         self.setCentralWidget(self._editor)
         self._update_window_title()
@@ -261,7 +264,14 @@ class MainWindow(QMainWindow):
         self._settings.setValue("font/family", family)
 
     def _setup_menus(self) -> None:
-        menu = self.menuBar()
+        # macOS: a menu bar with no parent is the app's menu bar even while
+        # no window is open, so File > New (Cmd+N) still works after the
+        # window is closed. Elsewhere the menu bar lives in the window.
+        if sys.platform == "darwin":
+            self._menubar = QMenuBar(None)
+            menu = self._menubar
+        else:
+            menu = self.menuBar()
 
         # --- File menu ---
         file_menu = menu.addMenu("File")
@@ -354,12 +364,30 @@ class MainWindow(QMainWindow):
 
     def _new_file(self) -> None:
         def proceed() -> None:
-            self._editor.clear()
-            self._current_file = None
-            self._is_dirty = False
-            self._update_window_title()
-            self._set_document_edited(False)
+            self._reset_document()
+            self.bring_back()
         self._confirm_discard(proceed)
+
+    def _reset_document(self) -> None:
+        """Blank, untitled, clean — what a fresh window shows."""
+        self._editor._reset_compose_state()
+        self._editor.clear()
+        self._editor._force_rtl()
+        self._current_file = None
+        self._is_dirty = False
+        self._cleanup_recovery()
+        self._update_window_title()
+        self._set_document_edited(False)
+
+    def bring_back(self) -> None:
+        """Show the window again after it was closed (Dock click, Cmd+N)."""
+        if not self.isVisible():
+            self.show()
+            self._setup_title_bar()
+            self._update_window_title()
+        self.raise_()
+        self.activateWindow()
+        self._editor.setFocus()
 
     def _open_file(self) -> None:
         def proceed() -> None:
@@ -369,6 +397,7 @@ class MainWindow(QMainWindow):
             )
             if path:
                 self._load(Path(path))
+                self.bring_back()
         self._confirm_discard(proceed)
 
     def _load(self, path: Path) -> None:
@@ -487,9 +516,15 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event) -> None:
+        # Closing the window closes the document but not the app (Mac
+        # convention, Saad 2026-10-09): the window hides and comes back
+        # blank on a Dock click or Cmd+N. Cmd+Q is what quits (see
+        # _QuitWatcher: it sets _quitting, and we finish the quit here).
         if not self._is_dirty:
-            self._cleanup_recovery()
+            self._reset_document()
             event.accept()
+            if self._quitting:
+                QApplication.quit()
             return
 
         event.ignore()  # sheet decides asynchronously; re-close() below if confirmed
@@ -506,7 +541,8 @@ class MainWindow(QMainWindow):
                 self._set_document_edited(False)
                 self._cleanup_recovery()
                 self.close()
-            # Cancel: leave the window open, do nothing further
+            else:  # Cancel: leave the window open, stay running
+                self._quitting = False
 
         name = self._current_file.name if self._current_file else "Untitled"
         # Added in Save, Cancel, Discard order -> Cocoa lays them out
@@ -520,6 +556,26 @@ class MainWindow(QMainWindow):
 
 
 # ---------------------------------------------------------------------------
+
+class _QuitWatcher(QObject):
+    """Notes a quit request (Cmd+Q, Dock > Quit) on the window, and brings
+    the window back when the app is reopened with none showing."""
+
+    def __init__(self, window: MainWindow) -> None:
+        super().__init__()
+        self._window = window
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Quit:
+            self._window._quitting = True
+        return False
+
+    def on_state(self, state) -> None:
+        # Qt reports a Dock-icon click as the app becoming active, even when
+        # it already was (that's how it passes on macOS's "reopen").
+        if state == Qt.ApplicationActive and not self._window.isVisible():
+            self._window.bring_back()
+
 
 def _selftest() -> None:
     """`oktoboot --selftest`: check the bundled data loads and the engine
@@ -558,6 +614,10 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
+    app.setQuitOnLastWindowClosed(False)
+    watcher = _QuitWatcher(window)
+    app.installEventFilter(watcher)
+    app.applicationStateChanged.connect(watcher.on_state)
     window.show()
     # Title bar must be called after show() so the NSWindow handle exists
     window._setup_title_bar()
