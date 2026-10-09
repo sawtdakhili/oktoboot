@@ -148,6 +148,14 @@ mostachfa   مستشفى
 souk        سوق
 mdina       مدينة
 bled        بلاد
+lmaghrib    المغرب|لمغرب
+lkhobz      الخبز|لخبز
+ldar        الدار|لدار
+lflous      الفلوس|لفلوس
+inchallah   إنشالله|انشالله|إن شاء الله
+l7amdollah  الحمدلله|الحمد لله
+aakhir      آخر
+omar        عمر
 """
 
 

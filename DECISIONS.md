@@ -92,3 +92,18 @@ Saad: `chokran` → شكراً, then شكرا, then شكران ("the an at the e
 - `scripts/release.sh` does a whole update: build, GitHub release, bump `version`/`sha256` in the cask.
 - Ad-hoc signing changes with every build, so macOS likely asks for "Open Anyway" again after each update. Only a paid Apple developer account ($99/yr) avoids it; not now.
 - The cask's `zap` removes `~/Library/Application Support/oktoboot` (learned words + recovery file) only on `brew uninstall --zap`.
+
+## 2026-10-09 — First-use fixes + ideas taken from Yamli
+
+From Saad's first test of the brew install:
+- **Blank lines:** Qt's Enter on an empty paragraph that carries a block format (ours are all RTL) only clears the format. The editor now inserts the paragraph itself.
+- **Clicking a suggestion** took focus from the editor, so the word was committed as Latin and the click lost. The popup can't take focus now.
+- **آ:** word-initial `aa` → آ (aakhir → آخر, aamin → آمين); `2aa` → آ anywhere (9or2aan → قرآن). Mid-word `aa` stays ا.
+- **Live preview (Saad):** Up/Down puts the highlighted suggestion in the text itself. Typing or Backspace goes back to the Latin; Escape puts the Latin back (or the original word, in a re-edit).
+- **Leaving a word keeps its suggestion (Saad agreed, "we'll see"):** arrows, a click elsewhere, a Cmd shortcut or focus moving inside the app now commit the highlighted suggestion, as Space does. Before, the word silently stayed Latin. Escape (popup closed) and Shift+Space still keep the Latin. Revert = `_finish_word` back to `_commit_latin`.
+
+Yamli study (its own API, 157 words: oktoboot 85% first-right, Yamli 74%; was 82%). Taken from Yamli:
+- Darija article: bare `l` before a consonant → ال (lmaghrib → المغرب); the ل-only form stays in the list.
+- A word never starts with ي/و for a vowel: initial i/e/o/u → إ/ا/أ (inchallah → إنشالله, ekhtar → اختار). `allah` → الله as one piece.
+- `_NAMES`: ~65 common Moroccan names with their Latin spellings, only ones the rules got wrong. Names win over same-spelled words (walid → وليد before والد).
+Kept different from Yamli on purpose: Moroccan alif spellings, ڭ, full list visible, Enter accepts, Tab inserts a tab, mode shown by cursor colour. Not taken: "show more" short list, report-a-word, hyphenated words.

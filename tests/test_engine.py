@@ -92,6 +92,15 @@ def test_ch_is_shin():
     has_shin = any("ش" in r for r in results)
     assert has_shin, f"expected ش in candidates for 'chokran', got {results[:5]}"
 
+def test_initial_aa_is_alef_madda():
+    # A long ā at the start of a word is written آ (Saad, 2026-10-09);
+    # "2aa" gives آ anywhere.
+    assert suggest("aakhir")[0] == "آخر", suggest("aakhir")[:3]
+    assert suggest("aamin")[0] == "آمين", suggest("aamin")[:3]
+    assert suggest("9or2aan")[0] == "قرآن", suggest("9or2aan")[:3]
+    # Mid-word "aa" stays a plain alef
+    assert suggest("kitaab")[0] == "كتاب", suggest("kitaab")[:3]
+
 def test_g_has_gaf():
     # g → ڭ must be generated. ڭاري (Moroccan "taxi") has MSA freq=0 so it
     # sits in the "more choices" tail, but must be findable. After the user

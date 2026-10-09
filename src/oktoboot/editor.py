@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from PySide6.QtCore import (
@@ -188,6 +189,11 @@ class SuggestionPopup(QFrame):
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._list.itemClicked.connect(self._on_item_clicked)
+        # Clicking a suggestion must not take focus from the editor: the
+        # focus-out would commit the word as Latin and hide the popup
+        # before the click registers.
+        self.setFocusPolicy(Qt.NoFocus)
+        self._list.setFocusPolicy(Qt.NoFocus)
         layout.addWidget(self._list)
 
         self._items: list[str] = []
@@ -337,6 +343,16 @@ class ArabicEditor(QTextEdit):
         # on the next popup, so the chosen rendering of the earlier
         # letters is kept.
         self._pinned_prefix: str | None = None
+        # What a fresh compose currently shows on screen: its Latin token,
+        # or the suggestion highlighted with Up/Down (live preview).
+        self._shown: str = ""
+        # True while we rewrite the word ourselves: the caret moves as a
+        # side effect, and _on_cursor_moved must not treat that as the
+        # user leaving the word.
+        self._rewriting: bool = False
+        # Re-edit that was turned into a preview: the word it replaced, so
+        # Escape can put it back. (latin, arabic) or None.
+        self._preview_original: tuple[str, str] | None = None
         # True when the popup was open at the moment the app deactivated —
         # it's restored on reactivation (an Escape-dismissed popup is not).
         self._restore_popup_on_activate: bool = False
@@ -472,14 +488,6 @@ class ArabicEditor(QTextEdit):
         self.setTextCursor(cursor)
         self.setAlignment(Qt.AlignLeft)
 
-    def _apply_rtl_to_current_block(self) -> None:
-        cursor = self.textCursor()
-        fmt = cursor.blockFormat()
-        fmt.setAlignment(Qt.AlignLeft)
-        fmt.setLayoutDirection(Qt.RightToLeft)
-        cursor.setBlockFormat(fmt)
-        self.setTextCursor(cursor)
-
     # ------------------------------------------------------------------
     # Copy — carry RTL direction into plain-text paste targets. Qt's
     # default rich-text (HTML) clipboard flavor already marks each
@@ -487,8 +495,8 @@ class ArabicEditor(QTextEdit):
     # plain-text flavor (or a mostly-empty secondary rich-text flavor
     # some apps prefer) gets no directional signal at all and may guess
     # left — confirmed live: oktoboot → TextEdit pasted left-aligned.
-    # Every document here is always RTL (see _force_rtl /
-    # _apply_rtl_to_current_block), so this applies unconditionally.
+    # Every document here is always RTL (see _force_rtl and
+    # the Enter handling in keyPressEvent), so this applies unconditionally.
 
     RLM = "‏"  # Right-to-Left Mark — invisible, zero width
 
@@ -552,18 +560,22 @@ class ArabicEditor(QTextEdit):
 
         # Popup navigation
         if self._popup.isVisible():
-            if key == Qt.Key_Down:
-                self._popup.move_selection(1)
-                return
-            if key == Qt.Key_Up:
-                self._popup.move_selection(-1)
+            if key in (Qt.Key_Down, Qt.Key_Up):
+                self._popup.move_selection(1 if key == Qt.Key_Down else -1)
+                self._preview(self._popup.current_text())
                 return
             if key == Qt.Key_Escape:
                 if self._reedit_entry is not None:
                     # Re-editing: the underlying word was never modified,
                     # so a full clean reset is safe (no text change).
                     self._reset_compose_state()
+                elif self._preview_original is not None:
+                    # A re-edit that was previewed: put the word back.
+                    latin, arabic = self._preview_original
+                    self._compose_token = latin
+                    self._accept_suggestion(arabic, learn=False)
                 else:
+                    self._restore_latin()
                     self._dismiss_popup()
                 return
             if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
@@ -607,8 +619,17 @@ class ArabicEditor(QTextEdit):
         if key in (Qt.Key_Return, Qt.Key_Enter) and not self._popup.isVisible():
             if self._composing:
                 self._commit_latin()
-            super().keyPressEvent(event)
-            self._apply_rtl_to_current_block()
+            # New paragraph done here, not by Qt: on an empty paragraph
+            # that carries a block format (ours are all RTL), Qt's Enter
+            # only clears the format and inserts nothing — blank lines
+            # were impossible.
+            cursor = self.textCursor()
+            fmt = cursor.blockFormat()
+            fmt.setAlignment(Qt.AlignLeft)       # = visual right for RTL
+            fmt.setLayoutDirection(Qt.RightToLeft)
+            cursor.insertBlock(fmt)
+            self.setTextCursor(cursor)
+            self.ensureCursorVisible()
             return
 
         # Modifier keys alone (Shift, Alt, Cmd/Ctrl) — don't commit. Checked
@@ -629,8 +650,7 @@ class ArabicEditor(QTextEdit):
         # If Cmd or Ctrl is held (shortcuts like Cmd+A, Cmd+V, Cmd+C, Cmd+Z),
         # commit composing word and let Qt handle the shortcut — never compose
         if mods & (Qt.ControlModifier | Qt.AltModifier):
-            if self._composing:
-                self._commit_latin()
+            self._finish_word()
             super().keyPressEvent(event)
             return
 
@@ -639,9 +659,8 @@ class ArabicEditor(QTextEdit):
             self._handle_char(text)
             return
 
-        # Truly unknown key (arrows, Home, End, etc.) — commit then pass through
-        if self._composing:
-            self._commit_latin()
+        # Truly unknown key (arrows, Home, End, etc.) — finish then pass through
+        self._finish_word()
         super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
@@ -662,6 +681,9 @@ class ArabicEditor(QTextEdit):
         # Any word-ending character commits the composing word first
         if ch in WORD_ENDERS:
             if self._composing:
+                # Latin back on screen for the closing-quote check below;
+                # the highlighted choice is still read from the popup.
+                self._restore_latin()
                 token = self._compose_token
                 closing_quote = (token.endswith("'") and len(token) > 1
                                  and self._reedit_entry is None)
@@ -676,6 +698,7 @@ class ArabicEditor(QTextEdit):
                     self.setTextCursor(cursor)
                     token = token[:-1]
                     self._compose_token = token
+                    self._shown = token
                 # URL tokens stay Latin — no conversion
                 if _looks_like_url(token):
                     choice = token
@@ -706,6 +729,9 @@ class ArabicEditor(QTextEdit):
             # Typing into a reopened word: edit its Latin, not the Arabic.
             # If the word went stale, fall through to a fresh compose.
             self._reedit_to_latin()
+        if self._composing:
+            self._restore_latin()
+            self._preview_original = None
         if not self._composing:
             self._composing = True
             self._compose_start = self.textCursor().position()
@@ -713,6 +739,7 @@ class ArabicEditor(QTextEdit):
             self._reedit_entry = None
 
         self._compose_token += ch
+        self._shown = self._compose_token
         self._insert_char(ch)
 
         # If token looks like a URL, bypass transliteration entirely
@@ -851,6 +878,7 @@ class ArabicEditor(QTextEdit):
         self._reedit_entry = None
         self._compose_start = start
         self._compose_token = latin
+        self._shown = latin
         swap = QTextCursor(self.document())
         swap.setPosition(start)
         swap.setPosition(end, QTextCursor.KeepAnchor)
@@ -860,10 +888,75 @@ class ArabicEditor(QTextEdit):
         self.setTextCursor(caret)
         return True
 
+    @contextmanager
+    def _rewrite(self):
+        """Mark a text change we make ourselves (see _rewriting)."""
+        outer = self._rewriting
+        self._rewriting = True
+        try:
+            yield
+        finally:
+            self._rewriting = outer
+
+    def _compose_end(self) -> int:
+        return self._compose_start + len(self._shown)
+
+    def _replace_shown(self, text: str) -> None:
+        """Swap what a fresh compose shows on screen for `text`, caret at
+        its end. State first, so _on_cursor_moved sees the new range."""
+        start, end = self._compose_start, self._compose_end()
+        self._shown = text
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+        with self._rewrite():
+            cursor.insertText(text)
+            caret = self.textCursor()
+            caret.setPosition(start + len(text))
+            self.setTextCursor(caret)
+
+    def _preview(self, text: str | None) -> None:
+        """Show the highlighted suggestion in the text itself (Up/Down)."""
+        if not text or not self._composing:
+            return
+        if self._reedit_entry is not None:
+            original = (self._reedit_entry.latin, self._reedit_entry.text)
+            if not self._reedit_to_latin():
+                return
+            self._preview_original = original
+        if text != self._shown:
+            self._replace_shown(text)
+
+    def _restore_latin(self) -> None:
+        """Undo a live preview: put the Latin token back on screen."""
+        if (self._composing and self._reedit_entry is None
+                and self._shown != self._compose_token):
+            self._replace_shown(self._compose_token)
+
+    def _finish_word(self) -> None:
+        """
+        The user moved on from the word (arrow, click elsewhere, a shortcut):
+        keep the highlighted suggestion, as Space would. Popup closed with
+        Escape (or a URL) → the Latin stays. An untouched re-edit is left
+        as it was.
+        """
+        if not self._composing:
+            return
+        if self._reedit_entry is not None:
+            self._reset_compose_state()
+            return
+        choice = self._popup.current_text() if self._popup.isVisible() else None
+        if choice and not _looks_like_url(self._compose_token):
+            self._accept_suggestion(choice)
+        else:
+            self._commit_latin()
+
     def _reset_compose_state(self) -> None:
         self._composing = False
         self._compose_start = -1
         self._compose_token = ""
+        self._shown = ""
+        self._preview_original = None
         self._reedit_entry = None
         self._pinned_prefix = None
         self._restore_popup_on_activate = False
@@ -873,7 +966,7 @@ class ArabicEditor(QTextEdit):
     # ------------------------------------------------------------------
     # Acceptance
 
-    def _accept_suggestion(self, text: str) -> None:
+    def _accept_suggestion(self, text: str, learn: bool = True) -> None:
         if not self._composing:
             return
 
@@ -890,22 +983,22 @@ class ArabicEditor(QTextEdit):
         if reedit is not None:
             start, end = reedit.start(), reedit.end()
         else:
-            # Fresh compose — replace the Latin chars we inserted
-            start = self._compose_start
-            end = self._compose_start + len(self._compose_token)
+            # Fresh compose — replace what we put on screen
+            start, end = self._compose_start, self._compose_end()
 
         self._remove_words_overlapping(start, end)
 
         cursor = self.textCursor()
         cursor.setPosition(start)
         cursor.setPosition(end, QTextCursor.KeepAnchor)
-        cursor.insertText(text)
+        with self._rewrite():
+            cursor.insertText(text)
 
         # Record learned choice — including "kept as Latin" (text ==
         # original_token via Shift+Space), so that preference ranks
         # accordingly next time through the same tier-3 mechanism as any
         # other choice (see engine.suggest()).
-        if self._learned_db is not None:
+        if learn and self._learned_db is not None:
             engine.record_choice(original_token, text, self._learned_db)
 
         # Track the newly committed word so it can be re-edited later
@@ -918,6 +1011,7 @@ class ArabicEditor(QTextEdit):
         """Accept raw Latin without conversion."""
         if not self._composing:
             return
+        self._restore_latin()
 
         if self._reedit_entry is None:
             # Fresh compose — the literal Latin chars are what's on screen;
@@ -964,9 +1058,14 @@ class ArabicEditor(QTextEdit):
             if not self._reedit_to_latin():
                 return
 
+        if self._composing and self._reedit_entry is None:
+            self._restore_latin()
+            self._preview_original = None
+
         if self._composing and self._compose_token:
             # Remove last Latin composing char
             self._compose_token = self._compose_token[:-1]
+            self._shown = self._compose_token
             cursor = self.textCursor()
             cursor.deletePreviousChar()
             self.setTextCursor(cursor)
@@ -1022,8 +1121,7 @@ class ArabicEditor(QTextEdit):
                 if self._popup.was_navigated():
                     self._restore_highlight = self._popup.current_text()
         else:
-            if self._composing:
-                self._commit_latin()
+            self._finish_word()
         self._popup.hide()
         self._was_focused = False
 
@@ -1039,7 +1137,7 @@ class ArabicEditor(QTextEdit):
             # bug. A deliberate second click still moves the caret
             # (and commits) as usual.
             end = (self._reedit_entry.end() if self._reedit_entry is not None
-                   else self._compose_start + len(self._compose_token))
+                   else self._compose_end())
             cursor = self.textCursor()
             cursor.setPosition(end)
             self.setTextCursor(cursor)
@@ -1093,7 +1191,7 @@ class ArabicEditor(QTextEdit):
     # Cursor moved — hide popup if cursor left composing range
 
     def _on_cursor_moved(self) -> None:
-        if not self._composing:
+        if not self._composing or self._rewriting:
             return
         pos = self.textCursor().position()
 
@@ -1105,10 +1203,8 @@ class ArabicEditor(QTextEdit):
                 self._reset_compose_state()
             return
 
-        end = self._compose_start + len(self._compose_token)
-        if pos < self._compose_start or pos > end:
-            # Cursor left the Latin chars we're composing; they're already
-            # literally in the document, so finalize them as a committed
-            # word instead of leaving them silently attached to a stale
+        if pos < self._compose_start or pos > self._compose_end():
+            # Cursor left the word being typed (click, arrow): finish it
+            # now instead of leaving it silently attached to a stale
             # compose_start (which caused corruption on later accepts).
-            self._commit_latin()
+            self._finish_word()

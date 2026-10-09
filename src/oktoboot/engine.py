@@ -105,7 +105,10 @@ MAPPING: dict[str, list[str]] = {
     "ee": ["ي"],
     "ai": ["ي"],
     "ei": ["ي"],
-    "aa": ["ا", "عا"],
+    "aa": ["ا", "عا"],             # word-initial: آ first, see _INITIAL_LETTERS
+    "allah": ["الله"],            # inchallah → إنشالله, not ...الاه
+    "llah": ["لله"],              # 7amdollah → حمدلله
+    "2aa": ["آ"],                 # qor2aan → قرآن
 
     # apostrophe mid-word → hamza/ayn
     "'":  ["ع", "ء"],
@@ -267,7 +270,88 @@ _DARIJA_OVERRIDES: dict[str, list[str]] = {
     "chokran":  ["شكراً", "شكرا", "شكران"],
     # Darija adjective; the corpus's MSA نادماً would otherwise win (tanwin rule)
     "nadman":   ["ندمان"],
+    # DODa lists امن first; typed with a leading "aa" it's almost always amen
+    "aamin":    ["آمين", "آمن"],
+    # Typed with its hamza, the phrase is meant in full
+    "insha2allah":  ["إن شاء الله", "إنشاء الله"],
+    "incha2allah":  ["إن شاء الله", "إنشاء الله"],
 }
+
+# Common Moroccan first names (several Latin spellings each). Letter rules
+# can't get names right — ع, ص, ة, ى and long vowels are unpredictable — so
+# they're listed. Only names the engine got wrong on 2026-10-09 are here.
+_NAMES: dict[str, str] = {
+    "مصطفى": "moustafa mustapha mostafa mustafa moustapha mostapha",
+    "حمزة": "hamza",
+    "فاطمة": "fatima fatma",
+    "فتيحة": "fatiha",
+    "زينب": "zineb zaynab zeinab",
+    "رشيد": "rachid rashid",
+    "عمر": "omar omer",
+    "عثمان": "othmane otmane othman otman",
+    "سلمى": "salma",
+    "عائشة": "aicha aisha",
+    "عبد الله": "abdellah abdallah abdelah abdullah abdollah",
+    "عبد الرحيم": "abderrahim abdelrahim abderahim",
+    "عبد القادر": "abdelkader abdelkadar abdelqader",
+    "عبد الرحمن": "abderrahman abderrahmane abdelrahman",
+    "عبد العزيز": "abdelaziz",
+    "عبد الكريم": "abdelkrim abdelkarim",
+    "عبد اللطيف": "abdellatif abdelatif",
+    "عبد الحق": "abdelhak abdelhaq",
+    "عبد الصمد": "abdessamad abdesamad",
+    "سعيد": "said saeed",
+    "إدريس": "driss idriss idris",
+    "سفيان": "soufiane sofiane soufian sofian",
+    "أنس": "anas",
+    "إلياس": "ilyas ilias elias",
+    "زكرياء": "zakaria zakariae zakariya",
+    "أحمد": "ahmed ahmad",
+    "علي": "ali",
+    "آدم": "adam",
+    "إسماعيل": "ismail smail",
+    "رضا": "reda rida",
+    "وليد": "walid",
+    "طارق": "tarik tariq tarek",
+    "سميرة": "samira",
+    "نعيمة": "naima",
+    "مليكة": "malika",
+    "هدى": "houda hoda",
+    "أسماء": "asmae asma asmaa",
+    "لبنى": "loubna lobna",
+    "كنزة": "kenza",
+    "لمياء": "lamia lamya",
+    "نادية": "nadia",
+    "سعاد": "souad",
+    "عبدو": "abdo",
+    "عزيز": "aziz",
+    "إبراهيم": "brahim ibrahim",
+    "فاطنة": "fatna",
+    "يوسف": "youssef yousef youssouf",
+    "ياسين": "yassine yasin yassin",
+    "مهدي": "mehdi mahdi",
+    "خديجة": "khadija khadidja",
+    "كريم": "karim",
+    "هشام": "hicham hisham",
+    "أيوب": "ayoub ayyoub",
+    "إيمان": "imane iman",
+    "هاجر": "hajar",
+    "نبيل": "nabil",
+    "مريم": "meryem maryam meriem",
+    "خالد": "khalid khaled",
+    "محمد": "mohamed mohammed mohamad mhamed",
+    "أمين": "amine",
+    "يونس": "younes younous",
+    "جمال": "jamal",
+    "حميد": "hamid",
+    "سارة": "sara sarah",
+    "نور": "nour",
+    "حسن": "hassan",
+    "حسين": "hussein houssine",
+}
+for _name, _spellings in _NAMES.items():
+    for _latin in _spellings.split():
+        _DARIJA_OVERRIDES.setdefault(_latin, [_name])
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +416,18 @@ _PREFIX_KEYS: dict[str, list[str]] = {
     "kat": ["كت"],
 }
 
+# Keys that read differently at the very start of a word: a long ā there
+# is written آ (aamin→آمين, aakhir→آخر); mid-word "aa" stays ا.
+_INITIAL_LETTERS: dict[str, list[str]] = {
+    "aa": ["آ", "عا"],
+    # A word never starts with a vowel letter ي/و standing for i/o: it's an
+    # alef with or without hamza (ism→اسم, inchallah→إنشالله, omar→أمر).
+    "i": ["إ", "ا", "ي"],
+    "e": ["ا", "إ", "ي"],
+    "o": ["أ", "ا", "و"],
+    "u": ["أ", "ا", "و"],
+}
+
 # Frequency vs. typicality: score = log10(freq + 1) - _COST_WEIGHT * cost.
 # The weights above and this one were tuned together on
 # tests/test_darija_words.py (2026-10-08) while keeping test_engine.py green;
@@ -377,7 +473,8 @@ def _generate_candidates(token: str) -> dict[str, float]:
                 base += _FINAL_ABSORB_COST if final else _ABSORB_COST[info.absorbed]
             if info.vowel:
                 base += _WRITE_COST[key[0]]
-            options = [(letter, i * _ALT_COST) for i, letter in enumerate(info.letters)]
+            letters = _INITIAL_LETTERS.get(key, info.letters) if pos == 0 else info.letters
+            options = [(letter, i * _ALT_COST) for i, letter in enumerate(letters)]
             if final:
                 options += [(letter, _FINAL_EXTRA_COST) for letter in _FINAL_EXTRA.get(key, [])]
             for letter, step in options:
@@ -434,12 +531,18 @@ def _generative_lookup(token: str) -> list[str]:
     their plain form; each is listed right after it (محمد, then محمّد).
     """
     candidates = _generate_candidates(token)
-    # Also try with ال prefix stripped (handles 'alsalam' → السلام)
-    if token.lower().startswith("al") and len(token) > 3:
-        for c, cost in _generate_candidates(token[2:]).items():
-            out = "ال" + c
-            if cost + _KEY_COST < candidates.get(out, float("inf")):
-                candidates[out] = cost + _KEY_COST
+    t = token.lower()
+    # Article: "al" + word (alsalam → السلام), and Darija's bare "l" before
+    # a consonant (lmaghrib → المغرب, lmizan → الميزان). The ل-only spelling
+    # (لمغرب) stays in the list; frequency usually prefers the full article.
+    for prefix in ("al", "l"):
+        rest = t[len(prefix):]
+        if (t.startswith(prefix) and len(rest) >= 3
+                and (prefix == "al" or rest[0] not in _VOWEL_LETTERS)):
+            for c, cost in _generate_candidates(rest).items():
+                out = "ال" + c
+                if cost + _KEY_COST < candidates.get(out, float("inf")):
+                    candidates[out] = cost + _KEY_COST
 
     # Final "an" is often tanwin, not a written ن: chokran → شكراً (and the
     # same word without its tanwin, شكرا), jiddan → جداً. Built from the

@@ -675,15 +675,16 @@ e.close()
 
 
 # ---------------------------------------------------------------------------
-print("\n=== Test 22: In-app focus loss still commits the composing word ===")
+print("\n=== Test 22: In-app focus loss finishes the word with its suggestion ===")
 e = make_editor()
 type_text(e, "sal")
 QTest.qWait(50)
 app.processEvents()
+top = e._popup.current_text()
 app.sendEvent(e, QFocusEvent(QEvent.FocusOut, Qt.MouseFocusReason))
 app.processEvents()
 check("in-app focus loss commits", not e._composing)
-check("Latin stays in document", e.toPlainText() == "sal", e.toPlainText())
+check("highlighted suggestion kept (Saad, 2026-10-09)", e.toPlainText() == top, e.toPlainText())
 e.close()
 
 
@@ -848,6 +849,98 @@ check("our own RTL marks are stripped on paste", RLM not in e.toPlainText(), rep
 e.document().undo()
 app.processEvents()
 check("one undo removes the whole paste", e.toPlainText() == before, e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 28: Enter makes blank lines ===")
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Return)   # accepts the suggestion
+for _ in range(3):
+    QTest.keyClick(e, Qt.Key_Return)
+app.processEvents()
+type_text(e, "labas ")
+check("three Enters give two blank lines", e.toPlainText() == "سلام\n\n\nلاباس ", repr(e.toPlainText()))
+b = e.document().begin()
+dirs = []
+while b.isValid():
+    dirs.append(b.blockFormat().layoutDirection())
+    b = b.next()
+check("every new line is RTL", all(d == Qt.RightToLeft for d in dirs), dirs)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 29: Clicking a suggestion accepts it, editor keeps focus ===")
+e = make_editor()
+type_text(e, "salam")
+lst = e._popup._list
+second = lst.item(1).text()
+QTest.mouseClick(lst.viewport(), Qt.LeftButton, pos=lst.visualItemRect(lst.item(1)).center())
+app.processEvents()
+check("clicked suggestion inserted", e.toPlainText() == second, repr(e.toPlainText()))
+check("popup can't take focus", e._popup.focusPolicy() == Qt.NoFocus and lst.focusPolicy() == Qt.NoFocus)
+type_text(e, " ")
+QTest.keyClick(e, Qt.Key_Backspace)
+app.processEvents()
+check("space+backspace reopens it", e._popup.isVisible() and e._compose_token == "salam")
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 30: Up/Down shows the highlighted suggestion in the text ===")
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+second = e._popup.current_text()
+check("Down puts the 2nd suggestion in the text", e.toPlainText() == second, e.toPlainText())
+QTest.keyClick(e, Qt.Key_Up); app.processEvents()
+check("Up puts the 1st back", e.toPlainText() == e._popup.current_text(), e.toPlainText())
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+QTest.keyClick(e, Qt.Key_Backspace); app.processEvents()
+check("Backspace edits the Latin", e.toPlainText() == "sala" and e._compose_token == "sala", e.toPlainText())
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+QTest.keyClick(e, Qt.Key_Escape); app.processEvents()
+check("Escape brings the Latin back", e.toPlainText() == "sala", e.toPlainText())
+e.close()
+
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+second = e._popup.current_text()
+QTest.keyClick(e, Qt.Key_Space); app.processEvents()
+check("Space keeps the previewed word", e.toPlainText() == second + " ", e.toPlainText())
+QTest.keyClick(e, Qt.Key_Backspace); app.processEvents()
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+if e.toPlainText() == second:  # landed on the word itself; one more
+    QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+changed = e.toPlainText()
+QTest.keyClick(e, Qt.Key_Escape); app.processEvents()
+check("re-edit: preview, then Escape restores the word",
+      changed != second and e.toPlainText() == second, (changed, e.toPlainText()))
+e.close()
+
+e = make_editor()
+type_text(e, "salam")
+QTest.keyClick(e, Qt.Key_Down); app.processEvents()
+QTest.keyClick(e, Qt.Key_Space, Qt.ShiftModifier); app.processEvents()
+check("Shift+Space after a preview keeps the Latin", e.toPlainText() == "salam ", e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 31: Moving away from a word keeps its suggestion ===")
+e = make_editor()
+type_text(e, "kifach")
+QTest.keyClick(e, Qt.Key_Home); app.processEvents()
+check("Home converts the word", e.toPlainText() == "كيفاش", e.toPlainText())
+e.close()
+e = make_editor()
+type_text(e, "kifach")
+QTest.keyClick(e, Qt.Key_Escape); app.processEvents()
+QTest.keyClick(e, Qt.Key_Home); app.processEvents()
+check("after Escape the Latin stays", e.toPlainText() == "kifach", e.toPlainText())
 e.close()
 
 
