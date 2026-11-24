@@ -24,7 +24,7 @@ Plain Tab with no popup open inserts a literal tab character (Qt's default `QTex
 
 **Decisions:** `DECISIONS.md` — append-only; read it before changing engine ranking, saving, or data builds.
 
-**Next up (latest release v0.1.4, 2026-10-09 — brew: `brew install --cask sawtdakhili/tap/oktoboot`; Saad runs `scripts/release.sh`, publishing is blocked for Claude):**
+**Next up (latest release v0.1.5, 2026-11-24 — brew: `brew install --cask sawtdakhili/tap/oktoboot`; Saad runs `scripts/release.sh`, publishing is blocked for Claude):**
 1. Saad keeps using it; collect what feels wrong (live preview, finish-on-leave, Latin-first list, window close are new)
 2. Open: "suggestions reappear after deleting the space" not reproduced — needs Saad's exact key steps
 3. Later: tabs, harakat/tashkil mode, README screenshot; remaining benchmark misses (mezyan, wakha, ghadi, m3a, hit, bled, darija)
