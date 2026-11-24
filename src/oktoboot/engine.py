@@ -474,9 +474,13 @@ def _hamza_letters(t: str, pos: int, end: int, info: _Key) -> list[str]:
     return [seat] + [L for L in MAPPING["2"] if L != seat]
 
 
-def _generate_candidates(token: str) -> dict[str, float]:
+def _generate_candidates(token: str, initial: bool = True,
+                         final_pos: bool = True) -> dict[str, float]:
     """
     All spellings of `token` the key table allows, each with its cost.
+    `initial` / `final_pos` say whether the token starts / ends the word
+    (False when it is typed into an existing Arabic word: no word-initial
+    alef or verb prefix, no word-final ى/ة).
     Beam search, left to right: at each position every matching key and
     every letter option extends the cheapest partial spellings. Fully
     deterministic — ties break on the spelling itself.
@@ -495,7 +499,7 @@ def _generate_candidates(token: str) -> dict[str, float]:
             continue
         best = sorted(states[pos].items(), key=lambda x: (x[1], x[0]))[:_BEAM]
         matched = False
-        if pos == 0:
+        if pos == 0 and initial:
             for key, letters in _PREFIX_KEYS.items():
                 if t.startswith(key) and len(t) > len(key):
                     for out, cost in best:
@@ -505,14 +509,15 @@ def _generate_candidates(token: str) -> dict[str, float]:
                 continue
             matched = True
             end = pos + len(key)
-            final = end == n
+            final = end == n and final_pos
             info = _KEYS[key]
             base = _KEY_COST
             if info.absorbed:
                 base += _FINAL_ABSORB_COST if final else _ABSORB_COST[info.absorbed]
             if info.vowel:
                 base += _WRITE_COST[key[0]]
-            letters = _INITIAL_LETTERS.get(key, info.letters) if pos == 0 else info.letters
+            at_start = pos == 0 and initial
+            letters = _INITIAL_LETTERS.get(key, info.letters) if at_start else info.letters
             if info.base == "2":
                 letters = _hamza_letters(t, pos, end, info)
             options = [(letter, i * _ALT_COST + _RARE_LETTER_COST.get((info.base, letter.rstrip(SHADDA)), 0.0))
@@ -521,7 +526,7 @@ def _generate_candidates(token: str) -> dict[str, float]:
                 options += [(letter, _FINAL_EXTRA_COST) for letter in _FINAL_EXTRA.get(key, [])]
             for letter, step in options:
                 c = base + step
-                if pos > 0 and letter[0] in _HAMZA_SEATS and key[0] != "2":
+                if not at_start and letter[0] in _HAMZA_SEATS and key[0] != "2":
                     c += _MEDIAL_HAMZA_COST
                 for out, cost in best:
                     push(end, out + letter, cost + c)
@@ -627,6 +632,69 @@ def _generative_lookup(token: str) -> list[str]:
         if plain in shadda_form:
             result.append(shadda_form[plain][1])
     return result
+
+
+# ---------------------------------------------------------------------------
+# Letters typed into an existing Arabic word
+# ---------------------------------------------------------------------------
+
+TA_MARBUTA = "ة"
+_HARAKAT_RE = re.compile("[\u064B-\u0652]")
+# A final t or h can stand for ة (Saad, 2026-11-24): t → ة or ت, h → ة or
+# ه, frequency deciding. h is a weaker hint than t, so it pays more; with
+# no frequency to go on, the typed letter's own reading (ت / ه) wins.
+_TA_FROM_T_COST = 0.3
+_TA_FROM_H_COST = 3.0
+
+
+def suggest_in_word(before: str, token: str, after: str,
+                    max_results: int = 10) -> list[str]:
+    """
+    Latin `token` typed inside or at the edge of an Arabic word: `before`
+    and `after` are the Arabic letters on each side of the caret. Returns
+    whole words (before + a spelling of token + after), best-first, ranked
+    like _generative_lookup: corpus frequency of the whole word minus how
+    unusual the token's spelling is. The literal mix (before + token +
+    after) is always the last item, the "keep as typed" fallback.
+    """
+    literal = before + token + after
+    if not token:
+        return [literal]
+    spellings = _generate_candidates(token, initial=not before, final_pos=not after)
+
+    # ة is only ever final: inside a word it becomes ت (مدرسة + ha →
+    # مدرستها); a final ى before more letters becomes ي.
+    heads = [before]
+    if before.endswith(TA_MARBUTA):
+        heads = [before[:-1] + "ت"]
+    elif before.endswith("ى"):
+        heads = [before[:-1] + "ي", before]
+
+    words: dict[str, float] = {}
+
+    def add(word: str, cost: float) -> None:
+        if cost < words.get(word, float("inf")):
+            words[word] = cost
+
+    last = token[-1].lower()
+    for spelling, cost in spellings.items():
+        for head in heads:
+            add(head + spelling + after, cost)
+            if not after and len(spelling) and (
+                    (last == "t" and spelling.endswith(("ت", "ط")))
+                    or (last == "h" and spelling.endswith(("ه", "ح")))):
+                extra = _TA_FROM_T_COST if last == "t" else _TA_FROM_H_COST
+                add(head + spelling[:-1] + TA_MARBUTA + after, cost + extra)
+
+    def score(word: str) -> float:
+        # Vowel marks (fatha … sukun, shadda, tanwin) aren't in the
+        # frequency table: كَتَبة is looked up as كتبة.
+        plain = _HARAKAT_RE.sub("", word)
+        return math.log10(_freq_score(plain) + 1) - _COST_WEIGHT * words[word]
+
+    ranked = sorted(words, key=lambda w: (-score(w), w))
+    ranked = [w for w in ranked if w != literal][: max(max_results - 1, 0)]
+    return ranked + [literal]
 
 
 # ---------------------------------------------------------------------------

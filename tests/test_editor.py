@@ -766,15 +766,19 @@ type_text(e, "wach")
 QTest.keyClick(e, Qt.Key_Space)
 app.processEvents()
 second = e.toPlainText().split(" ")[1]
+first = e.toPlainText().split(" ")[0]
 reopen_at(e, 2)  # mid-word click
 type_text(e, "a")
-check("typing in a clicked word appends to its Latin",
-      e._compose_token == "salama" and e.toPlainText().startswith("salama "),
+check("typing in a clicked Arabic word puts the letter at the caret (Saad, 2026-11-24)",
+      e._compose_token == "a" and e.toPlainText().startswith(first[:2] + "a" + first[2:] + " "),
       (e._compose_token, e.toPlainText()))
+check("its suggestions are the whole word with the letter in it",
+      all(c.startswith(first[:2]) and c.endswith(first[2:]) for c in e._popup._items),
+      e._popup._items)
 top = e._popup.current_text()
-QTest.keyClick(e, Qt.Key_Space)
+QTest.keyClick(e, Qt.Key_Return)
 app.processEvents()
-check("accepting mid-sentence doesn't double the space",
+check("Enter accepts mid-sentence, the rest of the line untouched",
       e.toPlainText() == f"{top} {second} ", e.toPlainText())
 e.close()
 
@@ -1000,6 +1004,144 @@ e.close()
 e = make_editor(); db = make_db(); e.set_learned_db(db)
 type_text(e, "salam ")
 check("Space still teaches", learned_rows(db) == [("salam", "سلام")], learned_rows(db))
+e.close()
+
+
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 33: Letters typed into an existing Arabic word (Saad, 2026-11-24) ===")
+
+def editor_with(text, pos):
+    e = make_editor()
+    e.setPlainText(text)
+    cursor = e.textCursor()
+    cursor.setPosition(pos)
+    e.setTextCursor(cursor)
+    app.processEvents()
+    return e
+
+e = editor_with("جميل كبير", 4)
+type_text(e, "t")
+check("t at the end of a word offers ة first when it's the likelier word",
+      e._popup.current_text() == "جميلة", e._popup._items)
+check("ت is still in the list", "جميلت" in e._popup._items, e._popup._items)
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("Space puts the whole word back, no doubled space",
+      e.toPlainText() == "جميلة كبير", e.toPlainText())
+e.close()
+
+e = editor_with("جميل", 4)
+type_text(e, "h")
+items = e._popup._items
+check("h at the end: ه first, ة right below it",
+      items[1:3] == ["جميله", "جميلة"], items)
+e.close()
+
+e = editor_with("بن", 2)
+type_text(e, "t")
+check("t stays ت when that's the likelier word (بنت)",
+      e._popup.current_text() == "بنت", e._popup._items)
+e.close()
+
+e = editor_with("كتاب", 2)
+type_text(e, "i")
+check("a letter typed mid-word goes in at the caret",
+      e.toPlainText() == "كتiاب" and e._popup.current_text() == "كتياب",
+      (e.toPlainText(), e._popup.current_text()))
+QTest.keyClick(e, Qt.Key_Backspace)
+app.processEvents()
+check("backspacing it away leaves the word as it was",
+      e.toPlainText() == "كتاب" and not e._composing, (e.toPlainText(), e._composing))
+e.close()
+
+e = editor_with("جميل", 4)
+type_text(e, "t")
+QTest.keyClick(e, Qt.Key_Space, Qt.ShiftModifier)
+app.processEvents()
+check("Shift+Space keeps the letter as typed, inside the word",
+      e.toPlainText() == "جميلt ", e.toPlainText())
+e.close()
+
+e = make_editor()
+type_text(e, "jamil")
+QTest.keyClick(e, Qt.Key_Space)
+QTest.keyClick(e, Qt.Key_Backspace)   # reopens the word
+type_text(e, "t")
+check("reopened word + t offers ة too",
+      e._popup.current_text() == "جميلة", e._popup._items)
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 34: Down on the last line goes to its end, Up on the first to its start ===")
+e = editor_with("سطر\nسلام عليكم", 6)
+QTest.keyClick(e, Qt.Key_Down)
+app.processEvents()
+check("Down on the last line → end", e.textCursor().position() == 14, e.textCursor().position())
+cursor = e.textCursor(); cursor.setPosition(1); e.setTextCursor(cursor)
+QTest.keyClick(e, Qt.Key_Up)
+app.processEvents()
+check("Up on the first line → start", e.textCursor().position() == 0, e.textCursor().position())
+QTest.keyClick(e, Qt.Key_Down)
+app.processEvents()
+check("Down from the first line still goes down a line",
+      0 < e.textCursor().position() < 14 and e.textCursor().blockNumber() == 1,
+      e.textCursor().position())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 35: Space before or inside a word splits it at the caret (Saad, 2026-11-24) ===")
+e = editor_with("انا كتاب", 4)
+type_text(e, "3ndi")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("a word typed before another stays separate",
+      e.toPlainText() == "انا عندي كتاب", e.toPlainText())
+check("caret sits after the new space", e.textCursor().position() == 9, e.textCursor().position())
+e.close()
+
+e = editor_with("كتاب", 0)
+type_text(e, "w")
+QTest.keyClick(e, Qt.Key_Return)
+app.processEvents()
+check("Enter glues a letter to the word (وكتاب)", e.toPlainText() == "وكتاب", e.toPlainText())
+e.close()
+
+e = editor_with("كتاب", 0)
+type_text(e, "w")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("Space keeps it apart (و كتاب)", e.toPlainText() == "و كتاب", e.toPlainText())
+e.close()
+
+e = editor_with("كتاب", 2)
+type_text(e, "i")
+QTest.keyClick(e, Qt.Key_Space)
+app.processEvents()
+check("Space mid-word splits the word there",
+      e.toPlainText().endswith(" اب") and e.toPlainText().startswith("كت"), e.toPlainText())
+e.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n=== Test 36: Left/Right inside a word move one letter, typing edits it again ===")
+e = editor_with("مدرسة", 2)
+type_text(e, "a")
+QTest.keyClick(e, Qt.Key_Left)
+app.processEvents()
+word = e.toPlainText()
+check("the arrow accepts the highlighted word", word == "مدارسة", word)
+check("the caret moves one letter from where the typing was, not to the word's end",
+      e.textCursor().position() in (2, 4), e.textCursor().position())
+pos = e.textCursor().position()
+type_text(e, "o")
+check("a new letter goes in at the caret with new suggestions",
+      e._popup.isVisible() and all(c.startswith(word[:pos]) and c.endswith(word[pos:])
+                                   for c in e._popup._items),
+      (e.toPlainText(), e._popup._items))
 e.close()
 
 

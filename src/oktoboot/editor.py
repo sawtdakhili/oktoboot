@@ -82,6 +82,13 @@ _FOLD_MAP = str.maketrans({
     "ى": "ي", "ة": "ت",
 })
 
+_ARABIC_LETTER_RE = re.compile(r"[\u0621-\u0652\u0670-\u06D3\u06A4\u06AD]")
+
+
+def _is_arabic_letter(ch: str) -> bool:
+    return bool(ch) and bool(_ARABIC_LETTER_RE.fullmatch(ch))
+
+
 def _fold(s: str) -> str:
     return s.translate(_FOLD_MAP)
 
@@ -353,6 +360,12 @@ class ArabicEditor(QTextEdit):
         # What a fresh compose currently shows on screen: its Latin token,
         # or the suggestion highlighted with Up/Down (live preview).
         self._shown: str = ""
+        # Typing next to Arabic letters (inside a word, or adding to its
+        # end/start) edits that word: these are the Arabic letters on each
+        # side of the typed Latin. The compose range then covers
+        # before + token + after, and suggestions are whole words.
+        self._ctx_before: str = ""
+        self._ctx_after: str = ""
         # True while we rewrite the word ourselves: the caret moves as a
         # side effect, and _on_cursor_moved must not treat that as the
         # user leaving the word.
@@ -596,6 +609,11 @@ class ArabicEditor(QTextEdit):
                     self._accept_suggestion(choice)
                 return
             if key == Qt.Key_Space:
+                if self._reedit_entry is None and self._ctx_after:
+                    # Before or inside an Arabic word: the space goes in
+                    # at the caret and splits it (Saad, 2026-11-24).
+                    self._split_at_caret(" ", keep_latin=bool(mods & Qt.ShiftModifier))
+                    return
                 if (not mods & Qt.ShiftModifier and self._reedit_entry is None
                         and len(self._compose_token) > 1
                         and self._compose_token.endswith("'")):
@@ -695,9 +713,41 @@ class ArabicEditor(QTextEdit):
             self._handle_char(text)
             return
 
+        if (key in (Qt.Key_Left, Qt.Key_Right) and self._composing
+                and self._reedit_entry is None and self._ctx_after):
+            # Left/Right while typing inside an Arabic word (Saad,
+            # 2026-11-24): accept the highlighted word, put the caret back
+            # where the typing was, then let Qt move it one letter (Qt
+            # knows which way is which in right-to-left text). The next
+            # letter typed edits the word again, with new suggestions.
+            after_len = len(self._ctx_after)
+            choice = self._popup.current_text() if self._popup.isVisible() else None
+            if choice and not _looks_like_url(self._compose_token):
+                # Caret lands at the word's end; step back over the
+                # letters after it (never changed by a suggestion).
+                self._accept_suggestion(choice, learn=False)
+                cursor = self.textCursor()
+                cursor.setPosition(cursor.position() - after_len)
+                self.setTextCursor(cursor)
+            else:
+                self._commit_latin()   # caret already where the typing was
+            super().keyPressEvent(event)
+            return
+
         # Truly unknown key (arrows, Home, End, etc.) — finish then pass through
         self._finish_word()
+        before = self.textCursor().position()
         super().keyPressEvent(event)
+        if key in (Qt.Key_Down, Qt.Key_Up) and self.textCursor().position() == before:
+            # Mac convention (Saad, 2026-11-24): Down on the last line goes
+            # to its end, Up on the first line to its start. Qt stays put.
+            # Shift keeps the selection growing.
+            cursor = self.textCursor()
+            mode = (QTextCursor.KeepAnchor if mods & Qt.ShiftModifier
+                    else QTextCursor.MoveAnchor)
+            cursor.movePosition(QTextCursor.End if key == Qt.Key_Down
+                                else QTextCursor.Start, mode)
+            self.setTextCursor(cursor)
 
     # ------------------------------------------------------------------
     # Character dispatch
@@ -716,6 +766,10 @@ class ArabicEditor(QTextEdit):
 
         # Any word-ending character commits the composing word first
         if ch in WORD_ENDERS:
+            if self._composing and self._reedit_entry is None and self._ctx_after:
+                # Before or inside an Arabic word: split it at the caret.
+                self._split_at_caret(PUNCT_MAP.get(ch, ch))
+                return
             if self._composing:
                 # Latin back on screen for the closing-quote check below;
                 # the highlighted choice is still read from the popup.
@@ -734,14 +788,14 @@ class ArabicEditor(QTextEdit):
                     self.setTextCursor(cursor)
                     token = token[:-1]
                     self._compose_token = token
-                    self._shown = token
+                    self._shown = self._latin_shown()
                 # URL tokens stay Latin — no conversion
                 if _looks_like_url(token):
                     choice = token
                 elif self._popup.isVisible() and not closing_quote:
                     choice = self._popup.current_text() or token
                 else:
-                    candidates = engine.suggest(token, self._learned_db)
+                    candidates = self._candidates()
                     choice = candidates[0] if candidates else token
                 self._accept_suggestion(choice)
                 if closing_quote:
@@ -762,20 +816,37 @@ class ArabicEditor(QTextEdit):
         if self._composing and self._popup.isVisible() and self._popup.was_navigated():
             self._pinned_prefix = self._popup.current_text()
         if self._composing and self._reedit_entry is not None:
-            # Typing into a reopened word: edit its Latin, not the Arabic.
-            # If the word went stale, fall through to a fresh compose.
-            self._reedit_to_latin()
+            if _ARABIC_LETTER_RE.search(self._reedit_entry.text):
+                # Typing into a reopened Arabic word: the letter goes in
+                # at the caret, into the Arabic word (Saad, 2026-11-24),
+                # as for any Arabic word — see below.
+                self._reset_compose_state()
+            else:
+                # A word kept in Latin: edit its Latin. If the word went
+                # stale, fall through to a fresh compose.
+                self._reedit_to_latin()
         if self._composing:
             self._restore_latin()
             self._preview_original = None
         if not self._composing:
+            caret = self.textCursor().position()
+            doc = self.document()
+            before_start = caret
+            while before_start > 0 and _is_arabic_letter(doc.characterAt(before_start - 1)):
+                before_start -= 1
+            after_end = caret
+            while _is_arabic_letter(doc.characterAt(after_end)):
+                after_end += 1
+            text = self.toPlainText()
+            self._ctx_before = text[before_start:caret]
+            self._ctx_after = text[caret:after_end]
             self._composing = True
-            self._compose_start = self.textCursor().position()
+            self._compose_start = before_start
             self._compose_token = ""
             self._reedit_entry = None
 
         self._compose_token += ch
-        self._shown = self._compose_token
+        self._shown = self._latin_shown()
         self._insert_char(ch)
 
         # If token looks like a URL, bypass transliteration entirely
@@ -793,7 +864,7 @@ class ArabicEditor(QTextEdit):
             self._popup.hide()
             return
 
-        candidates = engine.suggest(self._compose_token, self._learned_db)
+        candidates = self._candidates()
 
         if not candidates:
             self._popup.hide()
@@ -808,7 +879,7 @@ class ArabicEditor(QTextEdit):
         # those cases, so three progressively looser tiers are tried in
         # order and the first one with any hits wins. No hits in any tier
         # falls back to the engine's own order.
-        if self._pinned_prefix:
+        if self._pinned_prefix and not self._in_word():
             pin = self._pinned_prefix
             # (matcher, needle) pairs, loosest match tried only if tighter
             # ones find nothing:
@@ -834,7 +905,7 @@ class ArabicEditor(QTextEdit):
                 rest = [c for c in candidates if c not in pinned]
                 candidates = pinned + rest
 
-        self._popup.populate(self._compose_token, candidates)
+        self._popup.populate(self._latin_shown(), candidates)
         pos = self._cursor_viewport_pos()
         self._popup.show_at(pos)
 
@@ -937,9 +1008,30 @@ class ArabicEditor(QTextEdit):
     def _compose_end(self) -> int:
         return self._compose_start + len(self._shown)
 
-    def _replace_shown(self, text: str) -> None:
+    def _in_word(self) -> bool:
+        """The compose is a letter typed into an existing Arabic word."""
+        return bool(self._ctx_before or self._ctx_after)
+
+    def _latin_shown(self) -> str:
+        """What the compose shows with no preview: the typed Latin, with
+        the Arabic word's letters around it when typed into one."""
+        return self._ctx_before + self._compose_token + self._ctx_after
+
+    def _typing_caret(self) -> int:
+        """Where the caret sits while typing (no preview): after the
+        typed Latin, which may be in the middle of the Arabic word."""
+        return self._compose_start + len(self._ctx_before) + len(self._compose_token)
+
+    def _candidates(self) -> list[str]:
+        if self._in_word():
+            return engine.suggest_in_word(
+                self._ctx_before, self._compose_token, self._ctx_after)
+        return engine.suggest(self._compose_token, self._learned_db)
+
+    def _replace_shown(self, text: str, caret_offset: int | None = None) -> None:
         """Swap what a fresh compose shows on screen for `text`, caret at
-        its end. State first, so _on_cursor_moved sees the new range."""
+        its end (or `caret_offset` into it). State first, so
+        _on_cursor_moved sees the new range."""
         start, end = self._compose_start, self._compose_end()
         self._shown = text
         cursor = QTextCursor(self.document())
@@ -948,7 +1040,7 @@ class ArabicEditor(QTextEdit):
         with self._rewrite():
             cursor.insertText(text)
             caret = self.textCursor()
-            caret.setPosition(start + len(text))
+            caret.setPosition(start + (len(text) if caret_offset is None else caret_offset))
             self.setTextCursor(caret)
 
     def _preview(self, text: str | None) -> None:
@@ -966,8 +1058,9 @@ class ArabicEditor(QTextEdit):
     def _restore_latin(self) -> None:
         """Undo a live preview: put the Latin token back on screen."""
         if (self._composing and self._reedit_entry is None
-                and self._shown != self._compose_token):
-            self._replace_shown(self._compose_token)
+                and self._shown != self._latin_shown()):
+            self._replace_shown(self._latin_shown(),
+                                len(self._ctx_before) + len(self._compose_token))
 
     def _finish_word(self) -> None:
         """
@@ -995,6 +1088,8 @@ class ArabicEditor(QTextEdit):
         self._compose_start = -1
         self._compose_token = ""
         self._shown = ""
+        self._ctx_before = ""
+        self._ctx_after = ""
         self._preview_original = None
         self._reedit_entry = None
         self._pinned_prefix = None
@@ -1011,6 +1106,11 @@ class ArabicEditor(QTextEdit):
 
         original_token = self._compose_token
         reedit = self._reedit_entry
+        in_word = reedit is None and self._in_word()
+        if in_word and text == original_token:
+            # "Keep as typed" (Shift+Space, URL): the Latin stays inside
+            # the Arabic word, as on screen.
+            text = self._latin_shown()
 
         if reedit is not None and not reedit.is_valid():
             # The word we intended to re-edit no longer matches what's in
@@ -1037,14 +1137,53 @@ class ArabicEditor(QTextEdit):
         # original_token via Shift+Space), so that preference ranks
         # accordingly next time through the same tier-3 mechanism as any
         # other choice (see engine.suggest()).
-        if learn and self._learned_db is not None:
+        # Not for a letter typed into a word: "t" → جميلة would teach
+        # every later "t" to become جميلة.
+        if learn and self._learned_db is not None and not in_word:
             engine.record_choice(original_token, text, self._learned_db)
 
-        # Track the newly committed word so it can be re-edited later
-        tracking_cursor = self._make_tracking_cursor(start, len(text))
-        self._words.append(CommittedWord(tracking_cursor, original_token, text))
+        # Track the newly committed word so it can be re-edited later.
+        # A word edited in place has no Latin of its own, so it isn't
+        # tracked: typing into it again edits the Arabic, as for any word.
+        if not in_word:
+            tracking_cursor = self._make_tracking_cursor(start, len(text))
+            self._words.append(CommittedWord(tracking_cursor, original_token, text))
 
         self._reset_compose_state()
+        # Where the caret is put afterwards (also by the in-word arrow
+        # keys: the split point is end − the untouched letters after it).
+        cursor = self.textCursor()
+        cursor.setPosition(start + len(text))
+        self.setTextCursor(cursor)
+
+    def _split_at_caret(self, ch: str, keep_latin: bool = False) -> None:
+        """
+        Space or punctuation typed before or inside an Arabic word (Saad,
+        2026-11-24): what's left of the caret becomes its own word, `ch`
+        goes in at the caret, and the rest of the word stays as it was.
+        So Space only "validates" at the end of a word; to glue a letter
+        to the word (و + كتاب → وكتاب), Enter or Tab accepts instead.
+
+        The left part is ranked on its own (عندي, not عنديكتاب), unless the
+        user scrolled to a suggestion: then that one is cut at the caret
+        (the letters after the caret are never changed by a suggestion).
+        """
+        self._restore_latin()
+        before, token, after = self._ctx_before, self._compose_token, self._ctx_after
+        start = self._compose_start
+        if keep_latin or _looks_like_url(token):
+            choice = self._latin_shown()
+        elif self._popup.isVisible() and self._popup.was_navigated():
+            choice = self._popup.current_text() or self._latin_shown()
+        else:
+            left = (engine.suggest_in_word(before, token, "") if before
+                    else engine.suggest(token, self._learned_db))
+            choice = (left[0] if left else before + token) + after
+        self._accept_suggestion(choice, learn=False)
+        cursor = self.textCursor()
+        cursor.setPosition(start + len(choice) - len(after))
+        self.setTextCursor(cursor)
+        self._insert_char(ch)
 
     def _commit_latin(self) -> None:
         """Accept raw Latin without conversion."""
@@ -1052,7 +1191,7 @@ class ArabicEditor(QTextEdit):
             return
         self._restore_latin()
 
-        if self._reedit_entry is None:
+        if self._reedit_entry is None and not self._in_word():
             # Fresh compose — the literal Latin chars are what's on screen;
             # track them so they can be re-clicked later.
             tracking_cursor = self._make_tracking_cursor(
@@ -1104,7 +1243,7 @@ class ArabicEditor(QTextEdit):
         if self._composing and self._compose_token:
             # Remove last Latin composing char
             self._compose_token = self._compose_token[:-1]
-            self._shown = self._compose_token
+            self._shown = self._latin_shown()
             cursor = self.textCursor()
             cursor.deletePreviousChar()
             self.setTextCursor(cursor)
@@ -1176,6 +1315,7 @@ class ArabicEditor(QTextEdit):
             # bug. A deliberate second click still moves the caret
             # (and commits) as usual.
             end = (self._reedit_entry.end() if self._reedit_entry is not None
+                   else self._typing_caret() if self._shown == self._latin_shown()
                    else self._compose_end())
             cursor = self.textCursor()
             cursor.setPosition(end)
@@ -1240,6 +1380,16 @@ class ArabicEditor(QTextEdit):
                 # Cursor left the word being re-edited; its on-screen text
                 # was never touched, so just cancel — nothing to commit.
                 self._reset_compose_state()
+            return
+
+        if self._in_word():
+            # Typed into an Arabic word: the caret belongs right after the
+            # typed Latin (or at the end of a previewed word). Anywhere
+            # else, even inside the same word, is leaving it.
+            expected = (self._typing_caret() if self._shown == self._latin_shown()
+                        else self._compose_end())
+            if pos != expected:
+                self._finish_word()
             return
 
         if pos < self._compose_start or pos > self._compose_end():

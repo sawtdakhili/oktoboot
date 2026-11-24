@@ -143,3 +143,24 @@ Letter check against DODa (7,325 one-word Moroccan pairs; "North Africa + Arabiz
 - `release.sh`: stops if the version wasn't bumped (release exists on another commit); tests run hidden (offscreen) and failures are shown. The Option+Backspace check skips itself offscreen (that platform has no macOS key bindings).
 - `python@3.14` marked installed-on-request so Homebrew keeps the venv's interpreter (noted in CLAUDE.md).
 - Not human-tested yet: Dock click, Cmd+Q, Dock > Quit with another app in front.
+
+## 2026-10-09 — Cmd+Backspace deletes to the line start (0.1.4)
+Saad: "cmd+bckspace doesnt work to delete a full line". Qt's QTextEdit has no Cmd+Backspace binding on macOS, so the key did nothing. The editor now does it itself, like other Mac apps: delete from the cursor back to the start of the visual line; at the line start already, join with the line above; with a selection, delete the selection. A composing word is committed as Latin first (shortcuts never convert). Test 26b in `tests/test_editor.py`. Released as 0.1.4.
+
+## 2026-11-24 — Letters typed into an existing Arabic word (Saad)
+Saad: a letter added inside an Arabic word should give suggestions with the letter in the word; ة at the end of a finished word never came up (t gave ت/ط/ا, h gave ه). Cause: a letter typed next to Arabic letters started a new one-letter word, and a reopened word added the letter to the end of its Latin, wherever the caret was.
+- Now a letter typed against Arabic letters (inside, at the end, at the start; reopened word or not) edits that word: suggestions are whole words, the letter at the caret (`engine.suggest_in_word`), ranked by the whole word's frequency minus the letter's spelling cost. The Latin row is the word with the Latin letter in it.
+- Final t → ة or ت, final h → ة or ه, frequency deciding (Saad: "based on the probability"). h pays more (`_TA_FROM_H_COST` 3.0 vs t's 0.3), so h → ه usually stays first and ة comes right under it (Saad expected h's ة to rank below ه). جميل+t → جميلة, بن+t → بنت, جميل+h → جميله then جميلة.
+- A ة before added letters becomes ت (مدرسة + ha → مدرستها).
+- These edits teach nothing and aren't tracked as words (they have no Latin of their own). Words kept in Latin still edit their Latin. Backspace in a reopened word still edits its Latin (unchanged).
+- Test 24 changed to the new behaviour; Test 33 added.
+
+## 2026-11-24 — Down on the last line goes to its end (Saad)
+Saad: "when i push the down key it doesnt go to the end of the line". Qt's QTextEdit leaves the caret where it is on the last line. Now, like other Mac apps, Down on the last line goes to the end of the text and Up on the first line goes to the start (Shift extends the selection). Test 34.
+
+## 2026-11-24 — /yousure on in-word editing; Space splits at the caret (Saad)
+- **Latin original as a second base (option 3): dropped for now** (Saad: "1.a (for test)"). It only exists for words typed this session (so the list would depend on hidden history), it could rank كتبت over كتابة for كتاب + t, and a mid-word Latin guess can split digraphs (شحال → "cahhal" → سهل) and would be saved/learned. Saad tests the current build (run from source; the installed 0.1.4 doesn't have the in-word change) first.
+- **Space only validates at the end of a word** (Saad: "validating a word with space should be only possible when the cursor is at the end of it and it would create a space after it"). Before or inside an Arabic word, Space (and punctuation) goes in at the caret and splits it: the left part is ranked on its own (3ndi before كتاب → عندي كتاب, not عنديكتاب), unless a suggestion was scrolled to (then that one is cut at the caret). To glue (و + كتاب → وكتاب), Enter or Tab. This narrows the earlier "typing at a word's start joins it" (entry above): it still joins, but only when accepted with Enter/Tab/click. Split words teach nothing. Test 35.
+- Not done yet (awaiting Saad): arrows moving inside the word with the tray open; vowel marks stripped before the frequency lookup.
+- **Left/Right inside a word** (Saad: "idc if the tray stays open or closes as long as moving the cursor and putting new letters generates new suggestions"): accept the highlighted word, put the caret back where the typing was, then Qt moves it one letter (Qt handles right-to-left direction). The tray closes; the next letter edits the word again with new suggestions. Before, the caret jumped to the word's end. Test 36. `_accept_suggestion` now always leaves the caret at the accepted word's end.
+- **Vowel marks ignored in the in-word frequency lookup** (Saad: "ok"): `suggest_in_word` strips all harakat (U+064B–0652), not just shadda, so a word with marks (كَتَب + t) is ranked on its frequency instead of spelling alone.
